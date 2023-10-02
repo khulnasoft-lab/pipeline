@@ -39,7 +39,7 @@ Documentation for specifying `Matrix` in a `Pipeline`:
 - [Specifying `Matrix` in `Finally Tasks`](pipelines.md#specifying-matrix-in-finally-tasks)
 - [Specifying `Matrix` in `Custom Tasks`](pipelines.md#specifying-matrix)
 
-> :seedling: **`Matrix` is an [alpha](install.md#alpha-features) feature.**
+> :seedling: **`Matrix` is an [alpha](additional-configs.md#alpha-features) feature.**
 > The `enable-api-fields` feature flag must be set to `"alpha"` to specify `Matrix` in a `PipelineTask`.
 
 ## Configuring a Matrix
@@ -358,11 +358,10 @@ tasks:
           value: $(tasks.task-2.results.duh.key) # string replacement from object result
 ```
 
-### Results from fanned out PipelineTasks
+### Results from fanned out Matrixed PipelineTasks
 
-Consuming `Results` from fanned out `PipelineTasks` will not be in the supported in the initial iteration
-of `Matrix`. Supporting consuming `Results` from fanned out `PipelineTasks` will be revisited after array
-and object `Results` are supported.
+Emitting `Results` from fanned out `PipelineTasks`  is not currently supported.
+We plan to support emitting `Results` from fanned out `PipelineTasks` in the near future.
 
 
 ## Retries
@@ -850,6 +849,6 @@ status:
 ```
 
 [cel]: https://github.com/tektoncd/experimental/tree/1609827ea81d05c8d00f8933c5c9d6150cd36989/cel
-[pr-with-matrix]: ../examples/v1beta1/pipelineruns/alpha/pipelinerun-with-matrix.yaml
-[pr-with-matrix-and-results]: ../examples/v1beta1/pipelineruns/alpha/pipelinerun-with-matrix-and-results.yaml
+[pr-with-matrix]: ../examples/v1/pipelineruns/alpha/pipelinerun-with-matrix.yaml
+[pr-with-matrix-and-results]: ../examples/v1/pipelineruns/alpha/pipelinerun-with-matrix-and-results.yaml
 [retries]: pipelines.md#using-the-retries-field

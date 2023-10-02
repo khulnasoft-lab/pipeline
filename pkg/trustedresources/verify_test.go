@@ -28,7 +28,6 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/google/go-cmp/cmp"
 	"github.com/sigstore/sigstore/pkg/signature"
 	"github.com/tektoncd/pipeline/pkg/apis/config"
 	v1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
@@ -36,7 +35,6 @@ import (
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
 	"github.com/tektoncd/pipeline/pkg/trustedresources/verifier"
 	test "github.com/tektoncd/pipeline/test"
-	"github.com/tektoncd/pipeline/test/diff"
 	"go.uber.org/zap/zaptest"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"knative.dev/pkg/logging"
@@ -46,121 +44,56 @@ const (
 	namespace = "trusted-resources"
 )
 
-var unsignedTask = v1.Task{
-	TypeMeta: metav1.TypeMeta{
-		APIVersion: "tekton.dev/v1",
-		Kind:       "Task"},
-	ObjectMeta: metav1.ObjectMeta{
-		Name:        "task",
-		Annotations: map[string]string{"foo": "bar"},
-	},
-	Spec: v1.TaskSpec{
-		Steps: []v1.Step{{
-			Image: "ubuntu",
-			Name:  "echo",
-		}},
-	},
-}
-
-var unsignedPipeline = v1.Pipeline{
-	TypeMeta: metav1.TypeMeta{
-		APIVersion: "tekton.dev/v1",
-		Kind:       "Pipeline"},
-	ObjectMeta: metav1.ObjectMeta{
-		Name:        "pipeline",
-		Annotations: map[string]string{"foo": "bar"},
-	},
-	Spec: v1.PipelineSpec{
-		Tasks: []v1.PipelineTask{
-			{
-				Name: "task",
+var (
+	unsignedV1Task = v1.Task{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "tekton.dev/v1",
+			Kind:       "Task"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "task",
+			Annotations: map[string]string{"foo": "bar"},
+		},
+		Spec: v1.TaskSpec{
+			Steps: []v1.Step{{
+				Image: "ubuntu",
+				Name:  "echo",
+			}},
+		},
+	}
+	unsignedV1beta1Pipeline = &v1beta1.Pipeline{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "tekton.dev/v1beta1",
+			Kind:       "Pipeline"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "test-pipeline",
+			Namespace:   "trusted-resources",
+			Annotations: map[string]string{"foo": "bar"},
+		},
+		Spec: v1beta1.PipelineSpec{
+			Tasks: []v1beta1.PipelineTask{
+				{
+					Name: "task",
+				},
 			},
 		},
-	},
-}
-
-func TestVerifyInterface_Task_Success(t *testing.T) {
-	sv, _, err := signature.NewDefaultECDSASignerVerifier()
-	if err != nil {
-		t.Fatalf("failed to get signerverifier %v", err)
 	}
-
-	unsignedTask := test.GetUnsignedTask("test-task")
-	signedTask, err := test.GetSignedV1beta1Task(unsignedTask, sv, "signed")
-	if err != nil {
-		t.Fatalf("Failed to get signed task %v", err)
+	unsignedV1Pipeline = v1.Pipeline{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "tekton.dev/v1",
+			Kind:       "Pipeline"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "pipeline",
+			Annotations: map[string]string{"foo": "bar"},
+		},
+		Spec: v1.PipelineSpec{
+			Tasks: []v1.PipelineTask{
+				{
+					Name: "task",
+				},
+			},
+		},
 	}
-
-	signature := []byte{}
-
-	if sig, ok := signedTask.Annotations[SignatureAnnotation]; ok {
-		delete(signedTask.Annotations, SignatureAnnotation)
-		signature, err = base64.StdEncoding.DecodeString(sig)
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	err = verifyInterface(signedTask, sv, signature)
-	if err != nil {
-		t.Fatalf("VerifyInterface() get err %v", err)
-	}
-}
-
-func TestVerifyInterface_Task_Error(t *testing.T) {
-	sv, _, err := signature.NewDefaultECDSASignerVerifier()
-	if err != nil {
-		t.Fatalf("failed to get signerverifier %v", err)
-	}
-
-	unsignedTask := test.GetUnsignedTask("test-task")
-
-	signedTask, err := test.GetSignedV1beta1Task(unsignedTask, sv, "signed")
-	if err != nil {
-		t.Fatalf("Failed to get signed task %v", err)
-	}
-
-	tamperedTask := signedTask.DeepCopy()
-	tamperedTask.Name = "tampered"
-
-	tcs := []struct {
-		name          string
-		task          *v1beta1.Task
-		expectedError error
-	}{{
-		name:          "Unsigned Task Fail Verification",
-		task:          unsignedTask,
-		expectedError: ErrResourceVerificationFailed,
-	}, {
-		name:          "Empty task Fail Verification",
-		task:          nil,
-		expectedError: ErrResourceVerificationFailed,
-	}, {
-		name:          "Tampered task Fail Verification",
-		task:          tamperedTask,
-		expectedError: ErrResourceVerificationFailed,
-	}}
-	for _, tc := range tcs {
-		t.Run(tc.name, func(t *testing.T) {
-			signature := []byte{}
-
-			if tc.task != nil {
-				if sig, ok := tc.task.Annotations[SignatureAnnotation]; ok {
-					delete(tc.task.Annotations, SignatureAnnotation)
-					signature, err = base64.StdEncoding.DecodeString(sig)
-					if err != nil {
-						t.Fatal(err)
-					}
-				}
-			}
-
-			err := verifyInterface(tc.task, sv, signature)
-			if !errors.Is(err, tc.expectedError) {
-				t.Errorf("verifyInterface got: %v, want: %v", err, tc.expectedError)
-			}
-		})
-	}
-}
+)
 
 func TestVerifyResource_Task_Success(t *testing.T) {
 	signer256, _, k8sclient, vps := test.SetupVerificationPolicies(t)
@@ -429,7 +362,7 @@ func TestVerifyResource_Task_Error(t *testing.T) {
 
 func TestVerifyResource_Pipeline_Success(t *testing.T) {
 	sv, _, k8sclient, vps := test.SetupVerificationPolicies(t)
-	unsignedPipeline := test.GetUnsignedPipeline("test-pipeline")
+	unsignedPipeline := unsignedV1beta1Pipeline
 	signedPipeline, err := test.GetSignedV1beta1Pipeline(unsignedPipeline, sv, "signed")
 	if err != nil {
 		t.Fatal("fail to sign task", err)
@@ -483,7 +416,7 @@ func TestVerifyResource_Pipeline_Error(t *testing.T) {
 	ctx = test.SetupTrustedResourceConfig(ctx, config.FailNoMatchPolicy)
 	sv, _, k8sclient, vps := test.SetupVerificationPolicies(t)
 
-	unsignedPipeline := test.GetUnsignedPipeline("test-pipeline")
+	unsignedPipeline := unsignedV1beta1Pipeline
 
 	signedPipeline, err := test.GetSignedV1beta1Pipeline(unsignedPipeline, sv, "signed")
 	if err != nil {
@@ -542,7 +475,7 @@ func TestVerifyResource_Pipeline_Error(t *testing.T) {
 
 func TestVerifyResource_V1Task_Success(t *testing.T) {
 	signer, _, k8sclient, vps := test.SetupVerificationPolicies(t)
-	signedTask, err := getSignedV1Task(unsignedTask.DeepCopy(), signer, "signed")
+	signedTask, err := getSignedV1Task(unsignedV1Task.DeepCopy(), signer, "signed")
 	if err != nil {
 		t.Error(err)
 	}
@@ -553,7 +486,7 @@ func TestVerifyResource_V1Task_Success(t *testing.T) {
 }
 func TestVerifyResource_V1Task_Error(t *testing.T) {
 	signer, _, k8sclient, vps := test.SetupVerificationPolicies(t)
-	signedTask, err := getSignedV1Task(unsignedTask.DeepCopy(), signer, "signed")
+	signedTask, err := getSignedV1Task(unsignedV1Task.DeepCopy(), signer, "signed")
 	if err != nil {
 		t.Error(err)
 	}
@@ -567,7 +500,7 @@ func TestVerifyResource_V1Task_Error(t *testing.T) {
 
 func TestVerifyResource_V1Pipeline_Success(t *testing.T) {
 	signer, _, k8sclient, vps := test.SetupVerificationPolicies(t)
-	signed, err := getSignedV1Pipeline(unsignedPipeline.DeepCopy(), signer, "signed")
+	signed, err := getSignedV1Pipeline(unsignedV1Pipeline.DeepCopy(), signer, "signed")
 	if err != nil {
 		t.Error(err)
 	}
@@ -579,7 +512,7 @@ func TestVerifyResource_V1Pipeline_Success(t *testing.T) {
 
 func TestVerifyResource_V1Pipeline_Error(t *testing.T) {
 	signer, _, k8sclient, vps := test.SetupVerificationPolicies(t)
-	signed, err := getSignedV1Pipeline(unsignedPipeline.DeepCopy(), signer, "signed")
+	signed, err := getSignedV1Pipeline(unsignedV1Pipeline.DeepCopy(), signer, "signed")
 	if err != nil {
 		t.Error(err)
 	}
@@ -598,81 +531,6 @@ func TestVerifyResource_TypeNotSupported(t *testing.T) {
 	vr := VerifyResource(context.Background(), &resource, k8sclient, refSource, vps)
 	if !errors.Is(vr.Err, ErrResourceNotSupported) {
 		t.Errorf("want:%v got:%v ", ErrResourceNotSupported, vr.Err)
-	}
-}
-
-func TestPrepareObjectMeta(t *testing.T) {
-	unsigned := test.GetUnsignedTask("test-task").ObjectMeta
-
-	signed := unsigned.DeepCopy()
-	sig := "tY805zV53PtwDarK3VD6dQPx5MbIgctNcg/oSle+MG0="
-	signed.Annotations = map[string]string{SignatureAnnotation: sig}
-
-	signedWithLabels := signed.DeepCopy()
-	signedWithLabels.Labels = map[string]string{"label": "foo"}
-
-	signedWithExtraAnnotations := signed.DeepCopy()
-	signedWithExtraAnnotations.Annotations["kubectl-client-side-apply"] = "client"
-	signedWithExtraAnnotations.Annotations["kubectl.kubernetes.io/last-applied-configuration"] = "config"
-
-	tcs := []struct {
-		name              string
-		objectmeta        *metav1.ObjectMeta
-		expected          metav1.ObjectMeta
-		expectedSignature string
-	}{{
-		name:       "Prepare signed objectmeta without labels",
-		objectmeta: signed,
-		expected: metav1.ObjectMeta{
-			Name:        "test-task",
-			Namespace:   namespace,
-			Annotations: map[string]string{},
-		},
-		expectedSignature: sig,
-	}, {
-		name:       "Prepare signed objectmeta with labels",
-		objectmeta: signedWithLabels,
-		expected: metav1.ObjectMeta{
-			Name:        "test-task",
-			Namespace:   namespace,
-			Labels:      map[string]string{"label": "foo"},
-			Annotations: map[string]string{},
-		},
-		expectedSignature: sig,
-	}, {
-		name:       "Prepare signed objectmeta with extra annotations",
-		objectmeta: signedWithExtraAnnotations,
-		expected: metav1.ObjectMeta{
-			Name:        "test-task",
-			Namespace:   namespace,
-			Annotations: map[string]string{},
-		},
-		expectedSignature: sig,
-	}, {
-		name:       "resource without signature shouldn't fail",
-		objectmeta: &unsigned,
-		expected: metav1.ObjectMeta{
-			Name:        "test-task",
-			Namespace:   namespace,
-			Annotations: map[string]string{"foo": "bar"},
-		},
-		expectedSignature: "",
-	}}
-
-	for _, tc := range tcs {
-		t.Run(tc.name, func(t *testing.T) {
-			task, signature, err := prepareObjectMeta(tc.objectmeta)
-			if err != nil {
-				t.Fatalf("got unexpected err: %v", err)
-			}
-			if d := cmp.Diff(task, tc.expected); d != "" {
-				t.Error(diff.PrintWantGot(d))
-			}
-			got := base64.StdEncoding.EncodeToString(signature)
-			if d := cmp.Diff(got, tc.expectedSignature); d != "" {
-				t.Error(diff.PrintWantGot(d))
-			}
-		})
 	}
 }
 

@@ -42,7 +42,7 @@ This document makes reference in a few places to different profiles for Tekton i
 
 The key words “MUST”, “MUST NOT”, “REQUIRED”, “SHALL”, “SHALL NOT”, “SHOULD”, “SHOULD NOT”, “RECOMMENDED”, “NOT RECOMMENDED”, “MAY”, and “OPTIONAL” are to be interpreted as described in [RFC 2119](https://tools.ietf.org/html/rfc2119).
 
-There is no formal specification of the Kubernetes API and Resource Model. This document assumes Kubernetes 1.24 behavior; this behavior will typically be supported by many future Kubernetes versions. Additionally, this document may reference specific core Kubernetes resources; these references may be illustrative (i.e. an implementation on Kubernetes) or descriptive (i.e. this Kubernetes resource MUST be exposed). References to these core Kubernetes resources will be annotated as either illustrative or descriptive.
+There is no formal specification of the Kubernetes API and Resource Model. This document assumes Kubernetes 1.25 behavior; this behavior will typically be supported by many future Kubernetes versions. Additionally, this document may reference specific core Kubernetes resources; these references may be illustrative (i.e. an implementation on Kubernetes) or descriptive (i.e. this Kubernetes resource MUST be exposed). References to these core Kubernetes resources will be annotated as either illustrative or descriptive.
 
 ## Modifying This Specification
 
@@ -236,7 +236,7 @@ List responses have the following fields (based on [`meta.v1/ListMeta`](https://
 | `name`        | string     | REQUIRED    |
 | `description` | string     | REQUIRED    |
 | `type`      | Enum:<br>- `"string"` (default)<br>- `"array"` <br>- `"object"` | REQUIRED (The values `string` and `array` for this field are REQUIRED, and the value `object` is RECOMMENDED.) |
-| `properties`  | map<string,PropertySpec> |RECOMMENDED <br><br>note: `PropertySpec` is a type that defines the spec of an individual key. See how to define the `properties` section in the [example](../examples/v1beta1/taskruns/alpha/object-param-result.yaml).|
+| `properties`  | map<string,PropertySpec> |RECOMMENDED <br><br>note: `PropertySpec` is a type that defines the spec of an individual key. See how to define the `properties` section in the [example](../examples/v1/taskruns/beta/object-param-result.yaml).|
 | `default`     | `ParamValue` | REQUIRED |
 
 ### `ParamValue`
@@ -276,7 +276,7 @@ A `ParamValue` may be a string, a list of string, or a map of string to string.
 | `name`        | string    | REQUIRED    |
 | `description` | string    | REQUIRED    |
 | `type`      | Enum:<br>- `"string"` (default)<br>- `"array"` <br>- `"object"` | RECOMMENDED (Each of the values is RECOMMENDED.)|
-| `properties`  | map<string,PropertySpec> | RECOMMENDED <br><br>note: `PropertySpec` is a type that defines the spec of an individual key. See how to define the `properties` section in the [example](../examples/v1beta1/taskruns/alpha/object-param-result.yaml).|
+| `properties`  | map<string,PropertySpec> | RECOMMENDED <br><br>note: `PropertySpec` is a type that defines the spec of an individual key. See how to define the `properties` section in the [example](../examples/v1/taskruns/beta/object-param-result.yaml).|
 
 ### `TaskRunResult`
 

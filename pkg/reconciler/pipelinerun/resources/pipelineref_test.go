@@ -36,6 +36,7 @@ import (
 	"github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
 	"github.com/tektoncd/pipeline/pkg/client/clientset/versioned/fake"
 	clientset "github.com/tektoncd/pipeline/pkg/client/clientset/versioned/fake"
+	"github.com/tektoncd/pipeline/pkg/reconciler/apiserver"
 	"github.com/tektoncd/pipeline/pkg/reconciler/pipelinerun/resources"
 	ttesting "github.com/tektoncd/pipeline/pkg/reconciler/testing"
 	"github.com/tektoncd/pipeline/pkg/trustedresources"
@@ -70,11 +71,29 @@ var (
 		},
 		EntryPoint: "foo/bar",
 	}
+	unsignedV1beta1Pipeline = &v1beta1.Pipeline{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "tekton.dev/v1beta1",
+			Kind:       "Pipeline"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "test-pipeline",
+			Namespace:   "trusted-resources",
+			Annotations: map[string]string{"foo": "bar"},
+		},
+		Spec: v1beta1.PipelineSpec{
+			Tasks: []v1beta1.PipelineTask{
+				{
+					Name: "task",
+				},
+			},
+		},
+	}
 
 	unsignedV1Pipeline = &v1.Pipeline{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "tekton.dev/v1",
-			Kind:       "Pipeline"},
+			Kind:       "Pipeline",
+		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        "pipeline",
 			Namespace:   "trusted-resources",
@@ -313,6 +332,14 @@ func TestGetPipelineFunc_RemoteResolution(t *testing.T) {
 			pipelineYAMLStringWithoutDefaults,
 		}, "\n"),
 		wantPipeline: parse.MustParseV1Pipeline(t, pipelineYAMLStringWithoutDefaults),
+	}, {
+		name: "v1 remote pipeline with different namespace",
+		pipelineYAML: strings.Join([]string{
+			"kind: Pipeline",
+			"apiVersion: tekton.dev/v1",
+			pipelineYAMLStringNamespaceFoo,
+		}, "\n"),
+		wantPipeline: parse.MustParseV1Pipeline(t, pipelineYAMLStringNamespaceFoo),
 	}}
 	for _, tc := range testcases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -388,7 +415,7 @@ func TestGetPipelineFunc_RemoteResolution_ValidationFailure(t *testing.T) {
 			})
 
 			resolvedPipeline, resolvedRefSource, _, err := fn(ctx, pipelineRef.Name)
-			if !errors.Is(err, resources.ErrReferencedPipelineValidationFailed) {
+			if !errors.Is(err, apiserver.ErrReferencedObjectValidationFailed) {
 				t.Errorf("expected RemotePipelineValidationFailed error but got none")
 			}
 			if resolvedPipeline != nil {
@@ -531,7 +558,7 @@ func TestGetPipelineFunc_V1beta1Pipeline_VerifyNoError(t *testing.T) {
 	signer, _, k8sclient, vps := test.SetupVerificationPolicies(t)
 	tektonclient := fake.NewSimpleClientset()
 
-	unsignedPipeline := test.GetUnsignedPipeline("test-pipeline")
+	unsignedPipeline := unsignedV1beta1Pipeline
 	unsignedV1Pipeline := &v1.Pipeline{}
 	unsignedPipeline.ConvertTo(ctx, unsignedV1Pipeline)
 	unsignedV1Pipeline.APIVersion = "tekton.dev/v1"
@@ -734,7 +761,7 @@ func TestGetPipelineFunc_V1beta1Pipeline_VerifyError(t *testing.T) {
 	tektonclient := fake.NewSimpleClientset()
 	signer, _, k8sclient, vps := test.SetupVerificationPolicies(t)
 
-	unsignedPipeline := test.GetUnsignedPipeline("test-pipeline")
+	unsignedPipeline := unsignedV1beta1Pipeline
 	unsignedPipelineBytes, err := json.Marshal(unsignedPipeline)
 	if err != nil {
 		t.Fatal("fail to marshal pipeline", err)
@@ -1180,7 +1207,7 @@ func TestGetPipelineFunc_GetFuncError(t *testing.T) {
 	tektonclient := fake.NewSimpleClientset()
 	_, k8sclient, vps := test.SetupMatchAllVerificationPolicies(t, "trusted-resources")
 
-	unsignedPipeline := test.GetUnsignedPipeline("test-pipeline")
+	unsignedPipeline := unsignedV1beta1Pipeline
 	unsignedPipelineBytes, err := json.Marshal(unsignedPipeline)
 	if err != nil {
 		t.Fatal("fail to marshal pipeline", err)
@@ -1301,6 +1328,21 @@ spec:
   params:
   - name: foo
     type: ""
+`
+
+var pipelineYAMLStringNamespaceFoo = `
+metadata:
+  name: foo
+  namespace: foo
+spec:
+  tasks:
+  - name: task1
+    taskSpec:
+      steps:
+      - name: step1
+        image: ubuntu
+        script: |
+          echo "hello world!"
 `
 
 func getSignedV1Pipeline(unsigned *v1.Pipeline, signer signature.Signer, name string) (*v1.Pipeline, error) {

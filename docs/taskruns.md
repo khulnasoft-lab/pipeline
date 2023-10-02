@@ -393,7 +393,7 @@ status:
 
 #### Extra Parameters
 
-**([alpha only](https://github.com/tektoncd/pipeline/blob/main/docs/install.md#alpha-features))**
+**([alpha only](https://github.com/tektoncd/pipeline/blob/main/docs/additional-configs.md#alpha-features))**
 
 You can pass in extra `Parameters` if needed depending on your use cases. An example use
 case is when your CI system autogenerates `TaskRuns` and it has `Parameters` it wants to
@@ -408,7 +408,7 @@ may be overridden by a TaskRun's StepSpecs and SidecarSpecs.
 
 ### Specifying Task-level `ComputeResources`
 
-**([alpha only](https://github.com/tektoncd/pipeline/blob/main/docs/install.md#alpha-features))**
+**([alpha only](https://github.com/tektoncd/pipeline/blob/main/docs/additional-configs.md#alpha-features))**
 
 Task-level compute resources can be configured in `TaskRun.ComputeResources`, or `PipelineRun.TaskRunSpecs.ComputeResources`.
 
@@ -499,9 +499,9 @@ workspaces:
 ```
 
 For more information, see the following topics:
-- For information mapping `Workspaces` to `Volumes`, see [Using `Workspace` variables in `TaskRuns`](workspaces.md#using-workspace-variables-in-taskruns).
+- For information on mapping `Workspaces` to `Volumes`, see [Using `Workspace` variables in `TaskRuns`](workspaces.md#using-workspace-variables-in-taskruns).
 - For a list of supported `Volume` types, see [Specifying `VolumeSources` in `Workspaces`](workspaces.md#specifying-volumesources-in-workspaces).
-- For an end-to-end example, see [`Workspaces` in a `TaskRun`](../examples/v1beta1/taskruns/workspace.yaml).
+- For an end-to-end example, see [`Workspaces` in a `TaskRun`](../examples/v1/taskruns/workspace.yaml).
 
 #### Propagated Workspaces
 
@@ -530,7 +530,7 @@ spec:
     name: tr-workspace
 ```
 
-Upon execution, the workspaces will be interpolated during resolution through to the taskspec.
+Upon execution, the workspaces will be interpolated during resolution through to the `taskSpec`.
 
 ```yaml
 apiVersion: tekton.dev/v1 # or tekton.dev/v1beta1
@@ -580,7 +580,7 @@ spec:
     name: tr-workspace 
 ```
 
-Upon execution, the above taskrun will fail because the task is referenced and workspace is not propagated. It mist be explicitly defined in the `spec` of the defined Task.
+Upon execution, the above `TaskRun` will fail because the `Task` is referenced and workspace is not propagated. It must be explicitly defined in the `spec` of the defined `Task`.
 
 ```yaml
 apiVersion: tekton.dev/v1 # or tekton.dev/v1beta1
@@ -633,7 +633,7 @@ and reasons.
 
 ### Configuring Task Steps and Sidecars in a TaskRun
 
-**([alpha only](https://github.com/tektoncd/pipeline/blob/main/docs/install.md#alpha-features))**
+**([alpha only](https://github.com/tektoncd/pipeline/blob/main/docs/additional-configs.md#alpha-features))**
 
 A TaskRun can specify `StepSpecs` or `SidecarSpecs` to configure Step or Sidecar
 specified in a Task. Only named Steps and Sidecars may be configured.
@@ -705,6 +705,7 @@ spec:
 ```
 {{% /tab %}}
 {{< /tabs >}}
+
 `StepSpecs` and `SidecarSpecs` must include the `name` field and may include `resources`.
 No other fields can be overridden.
 If the overridden `Task` uses a [`StepTemplate`](./tasks.md#specifying-a-step-template), configuration on
@@ -720,7 +721,7 @@ memory request, the memory limit from the `Step` will be preserved.
 ### Specifying `LimitRange` values
 
 In order to only consume the bare minimum amount of resources needed to execute one `Step` at a
-time from the invoked `Task`, Tekton will requests the compute values for CPU, memory, and ephemeral
+time from the invoked `Task`, Tekton will request the compute values for CPU, memory, and ephemeral
 storage for each `Step` based on the [`LimitRange`](https://kubernetes.io/docs/concepts/policy/limit-range/)
 object(s), if present. Any `Request` or `Limit` specified by the user (on `Task` for example) will be left unchanged.
 
@@ -738,7 +739,7 @@ Type: Succeeded
 Status: Unknown
 Reason: ToBeRetried
 ```
-- `status.StartTime` and `status.PodName` are unset to trigger another retry attempt.
+- `status.StartTime`, `status.PodName` and `status.Results` are unset to trigger another retry attempt.
 
 ### Configuring the failure timeout
 
@@ -1091,7 +1092,7 @@ spec:
 
 If a Task step specifies that it is to run as a different user than what is specified in the pod template,
 the step's `securityContext` will be applied instead of what is specified at the pod level. An example of
-this is available as a [TaskRun example](../examples/v1beta1/taskruns/run-steps-as-non-root.yaml).
+this is available as a [TaskRun example](../examples/v1/taskruns/run-steps-as-non-root.yaml).
 
 More information about Pod and Container Security Contexts can be found via the [Kubernetes website](https://kubernetes.io/docs/tasks/configure-pod-container/security-context/#set-the-security-context-for-a-pod).
 

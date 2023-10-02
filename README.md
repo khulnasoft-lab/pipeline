@@ -41,6 +41,7 @@ Tekton Pipelines are **Typed**:
 - Starting from the v0.39.x release of Tekton: **Kubernetes version 1.22 or later**
 - Starting from the v0.41.x release of Tekton: **Kubernetes version 1.23 or later**
 - Starting from the v0.45.x release of Tekton: **Kubernetes version 1.24 or later**
+- Starting from the v0.51.x release of Tekton: **Kubernetes version 1.25 or later**
 
 ### Read the docs
 
@@ -60,6 +61,15 @@ _See [our Deprecations table](docs/deprecations.md) for features that have been
 deprecated and the earliest date they'll be removed._
 
 ## Migrating
+
+### v1beta1 to v1
+
+Several Tekton CRDs and API spec fields, including ClusterTask CRD and Pipeline
+Resources fields, were updated or deprecated during the migration from `v1beta1`
+to `v1`.
+
+For users migrating their Tasks and Pipelines from `v1beta1` to `v1`, check
+out [the v1beta1 to v1 migration guide](./docs/migrating-v1beta1-to-v1.md).
 
 ### v1alpha1 to v1beta1
 

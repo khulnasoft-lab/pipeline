@@ -63,12 +63,15 @@ import (
 	"github.com/tektoncd/pipeline/test/parse"
 	"go.opentelemetry.io/otel/trace"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	k8sapierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	k8sruntimeschema "k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	fakekubeclientset "k8s.io/client-go/kubernetes/fake"
 	ktesting "k8s.io/client-go/testing"
 	"k8s.io/client-go/tools/record"
@@ -374,7 +377,7 @@ func initializeTaskRunControllerAssets(t *testing.T, d test.Data, opts pipeline.
 	test.EnsureConfigurationConfigMapsExist(&d)
 	c, informers := test.SeedTestData(t, ctx, d)
 	configMapWatcher := cminformer.NewInformedWatcher(c.Kube, system.Namespace())
-	ctl := NewController(&opts, testClock, trace.NewNoopTracerProvider())(ctx, configMapWatcher)
+	ctl := NewController(&opts, testClock)(ctx, configMapWatcher)
 	if err := configMapWatcher.Start(ctx.Done()); err != nil {
 		t.Fatalf("error starting configmap watcher: %v", err)
 	}
@@ -1671,6 +1674,7 @@ status:
       featureFlags:
         RunningInEnvWithInjectedSidecars: true
         EnableTektonOCIBundles: true
+        EnforceNonfalsifiability: "none"
         EnableAPIFields: "alpha"
         AwaitSidecarReadiness: true
         VerificationNoMatchPolicy: "ignore"
@@ -1683,6 +1687,7 @@ status:
       RunningInEnvWithInjectedSidecars: true
       EnableTektonOCIBundles: true
       EnableAPIFields: "alpha"
+      EnforceNonfalsifiability: "none"
       AwaitSidecarReadiness: true
       VerificationNoMatchPolicy: "ignore"
       EnableProvenanceInStatus: true
@@ -1735,12 +1740,57 @@ status:
     featureFlags:
       RunningInEnvWithInjectedSidecars: true
       EnableAPIFields: "beta"
+      EnforceNonfalsifiability: "none"
       AwaitSidecarReadiness: true
       VerificationNoMatchPolicy: "ignore"
       EnableProvenanceInStatus: true
       ResultExtractionMethod: "termination-message"
       MaxResultSize: 4096
       Coschedule: "workspaces"
+`)
+		toBeRetriedWithResultsTaskRun = parse.MustParseV1TaskRun(t, `
+metadata:
+  name: test-taskrun-with-results-to-be-retried
+  namespace: foo
+spec:
+  retries: 1
+  taskRef:
+    name: test-results-task
+status:
+  startTime: "2021-12-31T23:59:59Z"
+  results:
+    - name: aResult
+      type: string
+      value: aResultValue
+  conditions:
+  - reason: Failed
+    status: "False"
+    type: Succeeded
+`)
+		retriedWithResultsTaskRun = parse.MustParseV1TaskRun(t, `
+metadata:
+  name: test-taskrun-with-results-to-be-retried
+  namespace: foo
+spec:
+  retries: 1
+  taskRef:
+    name: test-results-task
+status:
+  podName:   ""
+  conditions:
+  - reason: ToBeRetried
+    status: Unknown
+    type: Succeeded
+  retriesStatus:
+  - conditions:
+    - reason: Failed
+      status: "False"
+      type: Succeeded
+    results:
+    - name: aResult
+      type: string
+      value: aResultValue
+    startTime: "2021-12-31T23:59:59Z"
 `)
 	)
 
@@ -1817,6 +1867,15 @@ status:
 		tr:            toBeRetriedTaskRun,
 		wantTr:        retriedTaskRun,
 		wantStartTime: true,
+	}, {
+		name: "TaskRun retry and clear the results",
+		testData: test.Data{
+			TaskRuns: []*v1.TaskRun{toBeRetriedWithResultsTaskRun},
+			Tasks:    []*v1.Task{resultsTask},
+		},
+		tr:            toBeRetriedWithResultsTaskRun,
+		wantTr:        retriedWithResultsTaskRun,
+		wantStartTime: false,
 	}} {
 		t.Run(tc.name, func(t *testing.T) {
 			testAssets, cancel := getTaskRunController(t, tc.testData)
@@ -1913,6 +1972,93 @@ spec:
 	condition := reconciledRun.Status.GetCondition(apis.ConditionSucceeded)
 	if !condition.IsUnknown() {
 		t.Errorf("Expected TaskRun to still be running but succeeded condition is %v", condition.Status)
+	}
+}
+
+func TestReconcile_InvalidRemoteTask(t *testing.T) {
+	namespace := "foo"
+	trName := "test-task-run-success"
+	trs := []*v1.TaskRun{parse.MustParseV1TaskRun(t, `
+metadata:
+  name: test-task-run-success
+  namespace: foo
+spec:
+  taskRef:
+    resolver: bar
+`)}
+	ts := parse.MustParseV1Task(t, `
+metadata:
+  name: test-task
+  namespace: foo
+spec:
+  steps:
+  - image: busybox
+    script: echo hello
+`)
+
+	taskBytes, err := yaml.Marshal(ts)
+	if err != nil {
+		t.Fatal("failed to marshal task", err)
+	}
+	taskReq := getResolvedResolutionRequest(t, "bar", taskBytes, "foo", trName)
+
+	tcs := []struct {
+		name             string
+		webhookErr       error
+		wantPermanentErr bool
+		wantFailed       bool
+	}{{
+		name:             "webhook validation fails: invalid object",
+		webhookErr:       apierrors.NewBadRequest("bad request"),
+		wantPermanentErr: true,
+		wantFailed:       true,
+	}, {
+		name:             "webhook validation fails with permanent error",
+		webhookErr:       apierrors.NewInvalid(schema.GroupKind{Group: "tekton.dev/v1", Kind: "TaskRun"}, "taskrun", field.ErrorList{}),
+		wantPermanentErr: true,
+		wantFailed:       true,
+	}, {
+		name:             "webhook validation fails: retryable",
+		webhookErr:       apierrors.NewTimeoutError("timeout", 5),
+		wantPermanentErr: false,
+		wantFailed:       false,
+	}}
+	for _, tc := range tcs {
+		d := test.Data{
+			TaskRuns: trs,
+			ConfigMaps: []*corev1.ConfigMap{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: config.GetFeatureFlagsConfigName(), Namespace: system.Namespace()},
+					Data: map[string]string{
+						"enable-api-fields": "beta",
+					},
+				},
+			},
+			ResolutionRequests: []*resolutionv1beta1.ResolutionRequest{&taskReq},
+		}
+		testAssets, cancel := getTaskRunController(t, d)
+		defer cancel()
+		c := testAssets.Controller
+		clients := testAssets.Clients
+		// Create an error when the Pipeline client attempts to create Tasks
+		clients.Pipeline.PrependReactor("create", "tasks", func(action ktesting.Action) (bool, runtime.Object, error) {
+			return true, nil, tc.webhookErr
+		})
+		err = c.Reconciler.Reconcile(testAssets.Ctx, fmt.Sprintf("%s/%s", namespace, trName))
+		if tc.wantPermanentErr != controller.IsPermanentError(err) {
+			t.Errorf("expected permanent error: %t but got %s", tc.wantPermanentErr, err)
+		}
+		reconciledRun, err := clients.Pipeline.TektonV1().TaskRuns(namespace).Get(testAssets.Ctx, trName, metav1.GetOptions{})
+		if err != nil {
+			t.Fatalf("Somehow had error getting reconciled run out of fake client: %s", err)
+		}
+
+		if tc.wantFailed && reconciledRun.Status.GetCondition(apis.ConditionSucceeded).Reason != podconvert.ReasonTaskFailedValidation {
+			t.Errorf("Expected TaskRun to have reason FailedValidation, but condition reason is %s", reconciledRun.Status.GetCondition(apis.ConditionSucceeded))
+		}
+		if !tc.wantFailed && reconciledRun.Status.GetCondition(apis.ConditionSucceeded).IsFalse() {
+			t.Errorf("Expected TaskRun to not be failed but has condition status false")
+		}
 	}
 }
 
@@ -2314,65 +2460,36 @@ status:
 	}
 }
 
-func TestReconcilePodFailuresStepImagePullFailed(t *testing.T) {
-	taskRun := parse.MustParseV1TaskRun(t, `
-metadata:
-  name: test-imagepull-fail
-  namespace: foo
-spec:
-  taskSpec:
-    steps:
-    - image: whatever
-status:
-  steps:
-  - container: step-unnamed-0
-    name: unnamed-0
-    imageID: whatever
-    waiting:
-      message: Back-off pulling image "whatever"
-      reason: ImagePullBackOff
-  taskSpec:
-    steps:
-    - image: whatever
-`)
-	expectedStatus := &apis.Condition{
-		Type:    apis.ConditionSucceeded,
-		Status:  corev1.ConditionFalse,
-		Reason:  "TaskRunImagePullFailed",
-		Message: `The step "unnamed-0" in TaskRun "test-imagepull-fail" failed to pull the image "whatever". The pod errored with the message: "Back-off pulling image "whatever"."`,
-	}
-
-	wantEvents := []string{
-		"Normal Started ",
-		`Warning Failed The step "unnamed-0" in TaskRun "test-imagepull-fail" failed to pull the image "whatever". The pod errored with the message: "Back-off pulling image "whatever".`,
-	}
-	d := test.Data{
-		TaskRuns: []*v1.TaskRun{taskRun},
-	}
-	testAssets, cancel := getTaskRunController(t, d)
-	defer cancel()
-	c := testAssets.Controller
-	clients := testAssets.Clients
-
-	if err := c.Reconciler.Reconcile(testAssets.Ctx, getRunName(taskRun)); err != nil {
-		t.Fatalf("Unexpected error when reconciling completed TaskRun : %v", err)
-	}
-	newTr, err := clients.Pipeline.TektonV1().TaskRuns(taskRun.Namespace).Get(testAssets.Ctx, taskRun.Name, metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("Expected completed TaskRun %s to exist but instead got error when getting it: %v", taskRun.Name, err)
-	}
-	condition := newTr.Status.GetCondition(apis.ConditionSucceeded)
-	if d := cmp.Diff(expectedStatus, condition, ignoreLastTransitionTime); d != "" {
-		t.Fatalf("Did not get expected condition %s", diff.PrintWantGot(d))
-	}
-	err = k8sevent.CheckEventsOrdered(t, testAssets.Recorder.Events, taskRun.Name, wantEvents)
-	if err != nil {
-		t.Errorf(err.Error())
-	}
-}
-
-func TestReconcilePodFailuresSidecarImagePullFailed(t *testing.T) {
-	taskRun := parse.MustParseV1TaskRun(t, `
+func TestReconcilePodFailuresImageFailures(t *testing.T) {
+	var stepNumber int8
+	for _, tc := range []struct {
+		desc    string
+		reason  string
+		message string
+		failure string // "step" or "sidecar"
+	}{{
+		desc:    "image pull failed sidecar",
+		reason:  "ImagePullBackOff",
+		message: "Back-off pulling image \"whatever\"",
+		failure: "sidecar",
+	}, {
+		desc:    "invalid image sidecar",
+		reason:  "InvalidImageName",
+		message: "Invalid image \"whatever\"",
+		failure: "sidecar",
+	}, {
+		desc:    "image pull failed step",
+		reason:  "ImagePullBackOff",
+		message: "Back-off pulling image \"whatever\"",
+		failure: "step",
+	}, {
+		desc:    "invalid image step",
+		reason:  "InvalidImageName",
+		message: "Invalid image \"whatever\"",
+		failure: "step",
+	}} {
+		t.Run(tc.desc, func(t *testing.T) {
+			taskRun := parse.MustParseV1TaskRun(t, `
 metadata:
   name: test-imagepull-fail
   namespace: foo
@@ -2392,14 +2509,10 @@ status:
   - container: step-unnamed-1
     name: unnamed-1
     imageID: whatever
-    waiting:
-      message: Back-off pulling image "whatever"
-      reason: ImagePullBackOff
   steps:
   - container: step-unnamed-2
     name: unnamed-2
-    running:
-      startedAt: "2022-06-09T10:13:41Z"
+    imageID: whatever
   taskSpec:
     sidecars:
     - image: ubuntu
@@ -2407,39 +2520,62 @@ status:
     steps:
     - image: alpine
 `)
-	expectedStatus := &apis.Condition{
-		Type:    apis.ConditionSucceeded,
-		Status:  corev1.ConditionFalse,
-		Reason:  "TaskRunImagePullFailed",
-		Message: `The sidecar "unnamed-1" in TaskRun "test-imagepull-fail" failed to pull the image "whatever". The pod errored with the message: "Back-off pulling image "whatever"."`,
-	}
+			startTime, _ := time.Parse(time.RFC3339, "2022-06-09T10:13:41Z")
+			if tc.failure == "step" {
+				taskRun.Status.Steps[0].Waiting = &corev1.ContainerStateWaiting{
+					Message: tc.message,
+					Reason:  tc.reason,
+				}
+				taskRun.Status.Sidecars[1].Running = &corev1.ContainerStateRunning{
+					StartedAt: metav1.NewTime(startTime),
+				}
+				stepNumber = 2
+			} else {
+				taskRun.Status.Sidecars[1].Waiting = &corev1.ContainerStateWaiting{
+					Message: tc.message,
+					Reason:  tc.reason,
+				}
+				taskRun.Status.Steps[0].Running = &corev1.ContainerStateRunning{
+					StartedAt: metav1.NewTime(startTime),
+				}
+				stepNumber = 1
+			}
 
-	wantEvents := []string{
-		"Normal Started ",
-		`Warning Failed The sidecar "unnamed-1" in TaskRun "test-imagepull-fail" failed to pull the image "whatever". The pod errored with the message: "Back-off pulling image "whatever".`,
-	}
-	d := test.Data{
-		TaskRuns: []*v1.TaskRun{taskRun},
-	}
-	testAssets, cancel := getTaskRunController(t, d)
-	defer cancel()
-	c := testAssets.Controller
-	clients := testAssets.Clients
+			expectedStatus := &apis.Condition{
+				Type:    apis.ConditionSucceeded,
+				Status:  corev1.ConditionFalse,
+				Reason:  "TaskRunImagePullFailed",
+				Message: fmt.Sprintf(`The %s "unnamed-%d" in TaskRun "test-imagepull-fail" failed to pull the image "whatever". The pod errored with the message: "%s."`, tc.failure, stepNumber, tc.message),
+			}
 
-	if err := c.Reconciler.Reconcile(testAssets.Ctx, getRunName(taskRun)); err != nil {
-		t.Fatalf("Unexpected error when reconciling completed TaskRun : %v", err)
-	}
-	newTr, err := clients.Pipeline.TektonV1().TaskRuns(taskRun.Namespace).Get(testAssets.Ctx, taskRun.Name, metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("Expected completed TaskRun %s to exist but instead got error when getting it: %v", taskRun.Name, err)
-	}
-	condition := newTr.Status.GetCondition(apis.ConditionSucceeded)
-	if d := cmp.Diff(expectedStatus, condition, ignoreLastTransitionTime); d != "" {
-		t.Fatalf("Did not get expected condition %s", diff.PrintWantGot(d))
-	}
-	err = k8sevent.CheckEventsOrdered(t, testAssets.Recorder.Events, taskRun.Name, wantEvents)
-	if err != nil {
-		t.Errorf(err.Error())
+			wantEvents := []string{
+				"Normal Started ",
+				fmt.Sprintf(`Warning Failed The %s "unnamed-%d" in TaskRun "test-imagepull-fail" failed to pull the image "whatever". The pod errored with the message: "%s.`, tc.failure, stepNumber, tc.message),
+			}
+			d := test.Data{
+				TaskRuns: []*v1.TaskRun{taskRun},
+			}
+			testAssets, cancel := getTaskRunController(t, d)
+			defer cancel()
+			c := testAssets.Controller
+			clients := testAssets.Clients
+
+			if err := c.Reconciler.Reconcile(testAssets.Ctx, getRunName(taskRun)); err != nil {
+				t.Fatalf("Unexpected error when reconciling completed TaskRun : %v", err)
+			}
+			newTr, err := clients.Pipeline.TektonV1().TaskRuns(taskRun.Namespace).Get(testAssets.Ctx, taskRun.Name, metav1.GetOptions{})
+			if err != nil {
+				t.Fatalf("Expected completed TaskRun %s to exist but instead got error when getting it: %v", taskRun.Name, err)
+			}
+			condition := newTr.Status.GetCondition(apis.ConditionSucceeded)
+			if d := cmp.Diff(expectedStatus, condition, ignoreLastTransitionTime); d != "" {
+				t.Fatalf("Did not get expected condition %s", diff.PrintWantGot(d))
+			}
+			err = k8sevent.CheckEventsOrdered(t, testAssets.Recorder.Events, taskRun.Name, wantEvents)
+			if err != nil {
+				t.Errorf(err.Error())
+			}
+		})
 	}
 }
 

@@ -132,7 +132,7 @@ applies to both.
           If not specified, the `kind` sub-field defaults to `Task.`
 
 Below is an example of a Pipeline declaration that uses a `ClusterTask`:
-**Note**: 
+**Note**:
 - There is no `v1` API specification for `ClusterTask` but a `v1beta1 clustertask` can still be referenced in a `v1 pipeline`.
 - The cluster resolver syntax below can be used to reference any task, not just a clustertask.
 
@@ -429,8 +429,8 @@ kubectl get tr taskrun-unit-test-t6qcl -o json | jq .status
   ],
 ```
 
-For an end-to-end example, see [the taskRun ignoring a step error](../examples/v1beta1/taskruns/ignore-step-error.yaml)
-and [the pipelineRun ignoring a step error](../examples/v1beta1/pipelineruns/ignore-step-error.yaml).
+For an end-to-end example, see [the taskRun ignoring a step error](../examples/v1/taskruns/ignore-step-error.yaml)
+and [the pipelineRun ignoring a step error](../examples/v1/pipelineruns/ignore-step-error.yaml).
 
 #### Accessing Step's `exitCode` in subsequent `Steps`
 
@@ -588,13 +588,13 @@ spec:
           type: string
 ```
 
-Refer to the [TaskRun example](../examples/v1beta1/taskruns/alpha/object-param-result.yaml) and the [PipelineRun example](../examples/v1beta1/pipelineruns/alpha/pipeline-object-param-and-result.yaml) in which `object` parameters are demonstrated.
+Refer to the [TaskRun example](../examples/v1/taskruns/beta/object-param-result.yaml) and the [PipelineRun example](../examples/v1/pipelineruns/beta/pipeline-object-param-and-result.yaml) in which `object` parameters are demonstrated.
 
   > NOTE:
   > - `object` param is a `beta` feature and gated by the `alpha` or `beta` feature flag.
   > - `object` param must specify the `properties` section to define the schema i.e. what keys are available for this object param. See how to define `properties` section in the following example and the [TEP-0075](https://github.com/tektoncd/community/blob/main/teps/0075-object-param-and-result-types.md#defaulting-to-string-types-for-values).
-  > - When providing value for an `object` param, one may provide values for just a subset of keys in spec's `default`, and provide values for the rest of keys at runtime ([example](../examples/v1beta1/taskruns/beta/object-param-result.yaml)).
-  > - When using object in variable replacement, users can only access its individual key ("child" member) of the object by its name i.e. `$(params.gitrepo.url)`. Using an entire object as a value is only allowed when the value is also an object like [this example](https://github.com/tektoncd/pipeline/blob/55665765e4de35b3a4fb541549ae8cdef0996641/examples/v1beta1/pipelineruns/beta/pipeline-object-param-and-result.yaml#L64-L65). See more details about using object param from the [TEP-0075](https://github.com/tektoncd/community/blob/main/teps/0075-object-param-and-result-types.md#using-objects-in-variable-replacement).
+  > - When providing value for an `object` param, one may provide values for just a subset of keys in spec's `default`, and provide values for the rest of keys at runtime ([example](../examples/v1/taskruns/beta/object-param-result.yaml)).
+  > - When using object in variable replacement, users can only access its individual key ("child" member) of the object by its name i.e. `$(params.gitrepo.url)`. Using an entire object as a value is only allowed when the value is also an object like [this example](https://github.com/tektoncd/pipeline/blob/55665765e4de35b3a4fb541549ae8cdef0996641/examples/v1/pipelineruns/beta/pipeline-object-param-and-result.yaml#L64-L65). See more details about using object param from the [TEP-0075](https://github.com/tektoncd/community/blob/main/teps/0075-object-param-and-result-types.md#using-objects-in-variable-replacement).
 
 ##### `array` type
 
@@ -694,7 +694,7 @@ spec:
 #### Default value
 Parameter declarations (within Tasks and Pipelines) can include default values which will be used if the parameter is
 not specified, for example to specify defaults for both string params and array params
-([full example](../examples/v1beta1/taskruns/array-default.yaml)) :
+([full example](../examples/v1/taskruns/array-default.yaml)) :
 
 ```yaml
 apiVersion: tekton.dev/v1 # or tekton.dev/v1beta1
@@ -734,7 +734,7 @@ spec:
 ```
 
 For more information, see [Using `Workspaces` in `Tasks`](workspaces.md#using-workspaces-in-tasks)
-and the [`Workspaces` in a `TaskRun`](../examples/v1beta1/taskruns/workspace.yaml) example YAML file.
+and the [`Workspaces` in a `TaskRun`](../examples/v1/taskruns/workspace.yaml) example YAML file.
 
 ### Propagated `Workspaces`
 
@@ -831,6 +831,53 @@ precise string you want returned from your `Task` into the result files that you
 
 The stored results can be used [at the `Task` level](./pipelines.md#passing-one-tasks-results-into-the-parameters-or-when-expressions-of-another)
 or [at the `Pipeline` level](./pipelines.md#emitting-results-from-a-pipeline).
+
+#### Emitting Object `Results`
+Emitting a task result of type `object` is a `beta` feature implemented based on the
+[TEP-0075](https://github.com/tektoncd/community/blob/main/teps/0075-object-param-and-result-types.md#emitting-object-results).
+You can initialize `object` results from a `task` using JSON escaped string. For example, to assign the following data to an object result:
+
+```
+{"url":"abc.dev/sampler","digest":"19f02276bf8dbdd62f069b922f10c65262cc34b710eea26ff928129a736be791"}
+```
+
+You will need to use escaped JSON to write to pod termination message:
+
+```
+{\"url\":\"abc.dev/sampler\",\"digest\":\"19f02276bf8dbdd62f069b922f10c65262cc34b710eea26ff928129a736be791\"}
+```
+
+An example of a task definition producing an object result:
+
+```yaml
+kind: Task
+apiVersion: tekton.dev/v1 # or tekton.dev/v1beta1
+metadata:
+  name: write-object
+  annotations:
+    description: |
+      A simple task that writes object
+spec:
+  results:
+    - name: object-results
+      type: object
+      description: The object results
+      properties:
+        url:
+          type: string
+        digest:
+          type: string
+  steps:
+    - name: write-object
+      image: bash:latest
+      script: |
+        #!/usr/bin/env bash
+        echo -n "{\"url\":\"abc.dev/sampler\",\"digest\":\"19f02276bf8dbdd62f069b922f10c65262cc34b710eea26ff928129a736be791\"}" | tee $(results.object-results.path)
+```
+
+> **Note:**
+> -  that the opening and closing braces  are mandatory along with an escaped JSON.
+> - object result must specify the `properties` section to define the schema i.e. what keys are available for this object result. Failing to emit keys from the defined object results will result in validation error at runtime.
 
 #### Emitting Array `Results`
 
@@ -944,13 +991,26 @@ As a general rule-of-thumb, if a result needs to be larger than a kilobyte, you 
 
 #### Larger `Results` using sidecar logs
 
-This is an experimental feature. The `results-from` feature flag must be set to `"sidecar-logs"`](./install.md#enabling-larger-results-using-sidecar-logs).
+This is an alpha feature which is guarded behind its own feature flag.  The `results-from` feature flag must be set to
+[`"sidecar-logs"`](./install.md#enabling-larger-results-using-sidecar-logs) to enable larger results using sidecar logs.
 
-Instead of using termination messages to store results, the taskrun controller injects a sidecar container which monitors the results of all the steps. The sidecar mounts the volume where results of all the steps are stored. As soon as it finds a new result, it logs it to std out. The controller has access to the logs of the sidecar container (Caution: we need you to enable access to [kubernetes pod/logs](./install.md#enabling-larger-results-using-sidecar-logs).
+Instead of using termination messages to store results, the taskrun controller injects a sidecar container which monitors
+the results of all the steps. The sidecar mounts the volume where results of all the steps are stored. As soon as it
+finds a new result, it logs it to std out. The controller has access to the logs of the sidecar container.
+**CAUTION**: we need you to enable access to [kubernetes pod/logs](./install.md#enabling-larger-results-using-sidecar-logs).
 
-This feature allows users to store up to 4 KB per result by default. Because we are not limited by the size of the termination messages, users can have as many results as they require (or until the CRD reaches its limit). If the size of a result exceeds this limit, then the TaskRun will be placed into a failed state with the following message: `Result exceeded the maximum allowed limit.`
+This feature allows users to store up to 4 KB per result by default. Because we are not limited by the size of the
+termination messages, users can have as many results as they require (or until the CRD reaches its limit). If the size
+of a result exceeds this limit, then the TaskRun will be placed into a failed state with the following message: `Result
+exceeded the maximum allowed limit.`
 
-**Note**: If you require even larger results, you can specify a different upper limit per result by setting `max-result-size` feature flag to your desired size in bytes ([see instructions](./install.md#enabling-larger-results-using-sidecar-logs)). **CAUTION**: the larger you make the size, more likely will the CRD reach its max limit enforced by the `etcd` server leading to bad user experience.
+**Note**: If you require even larger results, you can specify a different upper limit per result by setting
+`max-result-size` feature flag to your desired size in bytes ([see instructions](./install.md#enabling-larger-results-using-sidecar-logs)).
+**CAUTION**: the larger you make the size, more likely will the CRD reach its max limit enforced by the `etcd` server
+leading to bad user experience.
+
+Refer to the detailed instructions listed in [additional config](additional-configs.md#enabling-larger-results-using-sidecar-logs)
+to learn how to enable this feature.
 
 ### Specifying `Volumes`
 
@@ -1542,7 +1602,7 @@ specified at the pod level via the TaskRun `podTemplate`.
 
 More information about Pod and Container Security Contexts can be found via the [Kubernetes website](https://kubernetes.io/docs/tasks/configure-pod-container/security-context/#set-the-security-context-for-a-pod).
 
-The example Task/TaskRun above can be found as a [TaskRun example](../examples/v1beta1/taskruns/run-steps-as-non-root.yaml).
+The example Task/TaskRun above can be found as a [TaskRun example](../examples/v1/taskruns/run-steps-as-non-root.yaml).
 
 ## `Task` Authoring Recommendations
 

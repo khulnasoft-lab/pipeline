@@ -54,7 +54,6 @@ import (
 	"github.com/tektoncd/pipeline/test/diff"
 	"github.com/tektoncd/pipeline/test/names"
 	"github.com/tektoncd/pipeline/test/parse"
-	"go.opentelemetry.io/otel/trace"
 	"gomodules.xyz/jsonpatch/v2"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -148,7 +147,7 @@ func initializePipelineRunControllerAssets(t *testing.T, d test.Data, opts pipel
 	test.EnsureConfigurationConfigMapsExist(&d)
 	c, informers := test.SeedTestData(t, ctx, d)
 	configMapWatcher := cminformer.NewInformedWatcher(c.Kube, system.Namespace())
-	ctl := NewController(&opts, testClock, trace.NewNoopTracerProvider())(ctx, configMapWatcher)
+	ctl := NewController(&opts, testClock)(ctx, configMapWatcher)
 	if la, ok := ctl.Reconciler.(reconciler.LeaderAware); ok {
 		if err := la.Promote(reconciler.UniversalBucket(), func(reconciler.Bucket, types.NamespacedName) {}); err != nil {
 			t.Fatalf("error promoting reconciler leader: %v", err)
@@ -801,7 +800,7 @@ spec:
   pipelineRef:
     name: pipeline-not-exist
 `),
-		reason:             ReasonCouldntGetPipeline,
+		reason:             v1.PipelineRunReasonCouldntGetPipeline.String(),
 		hasNoDefaultLabels: true,
 		permanentError:     true,
 		wantEvents: []string{
@@ -818,7 +817,7 @@ spec:
   pipelineRef:
     name: pipeline-missing-tasks
 `),
-		reason:         ReasonCouldntGetTask,
+		reason:         v1.PipelineRunReasonCouldntGetTask.String(),
 		permanentError: true,
 		wantEvents: []string{
 			"Normal Started",
@@ -834,7 +833,7 @@ spec:
   pipelineRef:
     name: a-pipeline-without-params
 `),
-		reason:         ReasonFailedValidation,
+		reason:         v1.PipelineRunReasonFailedValidation.String(),
 		permanentError: true,
 		wantEvents: []string{
 			"Normal Started",
@@ -853,7 +852,7 @@ spec:
     - name: some-param
       value: stringval
 `),
-		reason:         ReasonParameterTypeMismatch,
+		reason:         v1.PipelineRunReasonParameterTypeMismatch.String(),
 		permanentError: true,
 		wantEvents: []string{
 			"Normal Started",
@@ -873,7 +872,7 @@ spec:
       value:
         key1: "a"
 `),
-		reason:         ReasonObjectParameterMissKeys,
+		reason:         v1.PipelineRunReasonObjectParameterMissKeys.String(),
 		permanentError: true,
 		wantEvents: []string{
 			"Normal Started",
@@ -894,7 +893,7 @@ spec:
         - "a"
         - "b"
     `),
-		reason:         ReasonParamArrayIndexingInvalid,
+		reason:         v1.PipelineRunReasonParamArrayIndexingInvalid.String(),
 		permanentError: true,
 		wantEvents: []string{
 			"Normal Started",
@@ -913,7 +912,7 @@ spec:
         taskRef:
           name: b@d-t@$k
 `),
-		reason:         ReasonFailedValidation,
+		reason:         v1.PipelineRunReasonFailedValidation.String(),
 		permanentError: true,
 		wantEvents: []string{
 			"Normal Started",
@@ -938,7 +937,7 @@ spec:
     - name: some-param
       value: stringval
 `, v1.ParamTypeArray)),
-		reason:         ReasonParameterTypeMismatch,
+		reason:         v1.PipelineRunReasonParameterTypeMismatch.String(),
 		permanentError: true,
 		wantEvents: []string{
 			"Normal Started",
@@ -960,7 +959,7 @@ spec:
         taskRef:
           name: a-task-that-needs-params
 `, v1.ParamTypeString)),
-		reason:         ReasonParameterMissing,
+		reason:         v1.PipelineRunReasonParameterMissing.String(),
 		permanentError: true,
 		wantEvents: []string{
 			"Normal Started",
@@ -980,7 +979,7 @@ spec:
           name: dag-task-1
         runAfter: [ dag-task-1 ]
 `),
-		reason:         ReasonInvalidGraph,
+		reason:         v1.PipelineRunReasonInvalidGraph.String(),
 		permanentError: true,
 		wantEvents: []string{
 			"Normal Started",
@@ -1006,7 +1005,7 @@ spec:
         taskRef:
           name: taskName
 `),
-		reason:         ReasonInvalidGraph,
+		reason:         v1.PipelineRunReasonInvalidGraph.String(),
 		permanentError: true,
 		wantEvents: []string{
 			"Normal Started",
@@ -1197,16 +1196,6 @@ status:
     kind: TaskRun
     name: test-pipeline-missing-results-task1
     pipelineTaskName: task1
-  provenance:
-    featureFlags:
-      RunningInEnvWithInjectedSidecars: true
-      EnableAPIFields: "beta"
-      AwaitSidecarReadiness: true
-      VerificationNoMatchPolicy: "ignore"
-      EnableProvenanceInStatus: true
-      ResultExtractionMethod: "termination-message"
-      MaxResultSize: 4096
-      Coschedule: "workspaces" 
 `)
 	d := test.Data{
 		PipelineRuns: prs,
@@ -1221,7 +1210,8 @@ status:
 	}
 
 	// The PipelineRun should be marked as failed due to InvalidTaskResultReference.
-	if d := cmp.Diff(reconciledRun, expectedPipelineRun, ignoreResourceVersion, ignoreLastTransitionTime, ignoreTypeMeta, ignoreStartTime, ignoreCompletionTime); d != "" {
+	if d := cmp.Diff(reconciledRun, expectedPipelineRun, ignoreResourceVersion, ignoreLastTransitionTime, ignoreTypeMeta,
+		ignoreStartTime, ignoreCompletionTime, ignoreProvenance); d != "" {
 		t.Errorf("Expected to see PipelineRun run marked as failed with the reason: InvalidTaskResultReference. Diff %s", diff.PrintWantGot(d))
 	}
 
@@ -1420,7 +1410,7 @@ func TestReconcileOnCancelledPipelineRun(t *testing.T) {
 		{
 			name:       "cancelled",
 			specStatus: v1.PipelineRunSpecStatusCancelled,
-			reason:     ReasonCancelled,
+			reason:     v1.PipelineRunReasonCancelled.String(),
 		},
 	}
 
@@ -2998,7 +2988,7 @@ spec:
 			}
 
 			// The PipelineRun should not be cancelled b/c we couldn't cancel the TaskRun
-			checkPipelineRunConditionStatusAndReason(t, reconciledRun, corev1.ConditionUnknown, ReasonCouldntCancel)
+			checkPipelineRunConditionStatusAndReason(t, reconciledRun, corev1.ConditionUnknown, v1.PipelineRunReasonCouldntCancel.String())
 			// The event here is "Normal" because in case we fail to cancel we leave the condition to unknown
 			// Further reconcile might converge then the status of the pipeline.
 			// See https://github.com/tektoncd/pipeline/issues/2647 for further details.
@@ -3116,7 +3106,7 @@ spec:
 	}
 
 	// The PipelineRun should not be timed out b/c we couldn't timeout the TaskRun
-	checkPipelineRunConditionStatusAndReason(t, reconciledRun, corev1.ConditionUnknown, ReasonCouldntTimeOut)
+	checkPipelineRunConditionStatusAndReason(t, reconciledRun, corev1.ConditionUnknown, v1.PipelineRunReasonCouldntTimeOut.String())
 	// The event here is "Normal" because in case we fail to timeout we leave the condition to unknown
 	// Further reconcile might converge then the status of the pipeline.
 	// See https://github.com/tektoncd/pipeline/issues/2647 for further details.
@@ -4817,21 +4807,12 @@ status:
     kind: CustomRun
     name: test-pipeline-run-finally-results-task-run-b
     pipelineTaskName: b-task
-  provenance:
-    featureFlags:
-      RunningInEnvWithInjectedSidecars: true
-      EnableAPIFields: "beta"
-      AwaitSidecarReadiness: true
-      VerificationNoMatchPolicy: "ignore"
-      EnableProvenanceInStatus: true
-      ResultExtractionMethod: "termination-message"
-      MaxResultSize: 4096
-      Coschedule: "workspaces"
 `)
 
 	expectedPr := expectedPrStatus
 
-	if d := cmp.Diff(expectedPr, reconciledRun, ignoreResourceVersion, ignoreLastTransitionTime, ignoreCompletionTime, ignoreStartTime, cmpopts.EquateEmpty()); d != "" {
+	if d := cmp.Diff(expectedPr, reconciledRun, ignoreResourceVersion, ignoreLastTransitionTime, ignoreCompletionTime, ignoreStartTime,
+		ignoreProvenance, cmpopts.EquateEmpty()); d != "" {
 		t.Errorf("expected to see pipeline run results created. Diff %s", diff.PrintWantGot(d))
 	}
 }
@@ -4975,21 +4956,12 @@ status:
     kind: TaskRun
     name: test-pipeline-run-results-task-run-a
     pipelineTaskName: a-task
-  provenance:
-    featureFlags:
-      RunningInEnvWithInjectedSidecars: true
-      EnableAPIFields: "beta"
-      AwaitSidecarReadiness: true
-      VerificationNoMatchPolicy: "ignore"
-      EnableProvenanceInStatus: true
-      ResultExtractionMethod: "termination-message"
-      MaxResultSize: 4096
-      Coschedule: "workspaces"
 `)
 
 	expectedPr := expectedPrStatus
 
-	if d := cmp.Diff(expectedPr, reconciledRun, ignoreResourceVersion, ignoreLastTransitionTime, ignoreCompletionTime, ignoreStartTime, cmpopts.EquateEmpty()); d != "" {
+	if d := cmp.Diff(expectedPr, reconciledRun, ignoreResourceVersion, ignoreLastTransitionTime, ignoreCompletionTime,
+		ignoreStartTime, ignoreProvenance, cmpopts.EquateEmpty()); d != "" {
 		t.Errorf("expected to see pipeline run results created. Diff %s", diff.PrintWantGot(d))
 	}
 }
@@ -6861,7 +6833,7 @@ spec:
 			t.Fatalf("Somehow had error getting reconciled run out of fake client: %s", err)
 		}
 
-		if tc.wantFailed && reconciledRun.Status.GetCondition(apis.ConditionSucceeded).Reason != ReasonFailedValidation {
+		if tc.wantFailed && reconciledRun.Status.GetCondition(apis.ConditionSucceeded).Reason != v1.PipelineRunReasonFailedValidation.String() {
 			t.Errorf("Expected PipelineRun to have reason FailedValidation, but condition reason is %s", reconciledRun.Status.GetCondition(apis.ConditionSucceeded))
 		}
 		if !tc.wantFailed && reconciledRun.Status.GetCondition(apis.ConditionSucceeded).IsFalse() {
@@ -7047,6 +7019,24 @@ spec:
           - name: platform
             value: linux
 `),
+		parse.MustParseV1PipelineRun(t, `
+metadata:
+  name: pipelinerun-with-invalid-taskrunspecs
+  namespace: foo
+spec:
+  taskRunSpecs:
+  - metadata:
+      annotations:
+        env: test
+    pipelineTaskName: invalid-task-name
+  pipelineSpec:
+    tasks:
+    - name: pt0
+      taskSpec:
+        steps:
+        - image: foo:latest
+  serviceAccountName: test-sa
+`),
 	}
 
 	cms := []*corev1.ConfigMap{withEnabledAlphaAPIFields(newFeatureFlagsConfigMap())}
@@ -7067,16 +7057,19 @@ spec:
 	}{
 		{
 			name:   "pipelinerun-param-invalid-result-variable",
-			reason: ReasonInvalidTaskResultReference,
+			reason: v1.PipelineRunReasonInvalidTaskResultReference.String(),
 		}, {
 			name:   "pipelinerun-pipeline-result-invalid-result-variable",
-			reason: ReasonInvalidTaskResultReference,
+			reason: v1.PipelineRunReasonInvalidTaskResultReference.String(),
 		}, {
 			name:   "pipelinerun-with-optional-workspace-validation",
-			reason: ReasonRequiredWorkspaceMarkedOptional,
+			reason: v1.PipelineRunReasonRequiredWorkspaceMarkedOptional.String(),
 		}, {
 			name:   "pipelinerun-matrix-param-invalid-type",
-			reason: ReasonInvalidMatrixParameterTypes,
+			reason: v1.PipelineRunReasonInvalidMatrixParameterTypes.String(),
+		}, {
+			name:   "pipelinerun-with-invalid-taskrunspecs",
+			reason: v1.PipelineRunReasonInvalidTaskRunSpec.String(),
 		},
 	}
 	for _, tc := range testCases {
@@ -7123,7 +7116,7 @@ spec:
 
 	wantEvents := []string(nil)
 	pipelinerun, _ := prt.reconcileRun(pr.Namespace, pr.Name, wantEvents, false)
-	checkPipelineRunConditionStatusAndReason(t, pipelinerun, corev1.ConditionUnknown, ReasonResolvingPipelineRef)
+	checkPipelineRunConditionStatusAndReason(t, pipelinerun, corev1.ConditionUnknown, v1.PipelineRunReasonResolvingPipelineRef.String())
 
 	client := prt.TestAssets.Clients.ResolutionRequests.ResolutionV1beta1().ResolutionRequests("default")
 	resolutionrequests, err := client.List(prt.TestAssets.Ctx, metav1.ListOptions{})
@@ -7198,7 +7191,7 @@ spec:
 
 	wantEvents := []string(nil)
 	pipelinerun, _ := prt.reconcileRun(pr.Namespace, pr.Name, wantEvents, false)
-	checkPipelineRunConditionStatusAndReason(t, pipelinerun, corev1.ConditionUnknown, ReasonResolvingPipelineRef)
+	checkPipelineRunConditionStatusAndReason(t, pipelinerun, corev1.ConditionUnknown, v1.PipelineRunReasonResolvingPipelineRef.String())
 
 	client := prt.TestAssets.Clients.ResolutionRequests.ResolutionV1beta1().ResolutionRequests("default")
 	resolutionrequests, err := client.List(prt.TestAssets.Ctx, metav1.ListOptions{})
@@ -7224,7 +7217,7 @@ spec:
 
 	// Check that the pipeline fails with the appropriate reason.
 	updatedPipelineRun, _ := prt.reconcileRun("default", "pr", nil, true)
-	checkPipelineRunConditionStatusAndReason(t, updatedPipelineRun, corev1.ConditionFalse, ReasonCouldntGetPipeline)
+	checkPipelineRunConditionStatusAndReason(t, updatedPipelineRun, corev1.ConditionFalse, v1.PipelineRunReasonCouldntGetPipeline.String())
 }
 
 // TestReconcileWithFailingTaskResolver checks that a PipelineRun with a failing Resolver
@@ -7285,7 +7278,7 @@ spec:
 
 	// Check that the pipeline fails.
 	updatedPipelineRun, _ := prt.reconcileRun("default", "pr", nil, true)
-	checkPipelineRunConditionStatusAndReason(t, updatedPipelineRun, corev1.ConditionFalse, ReasonCouldntGetTask)
+	checkPipelineRunConditionStatusAndReason(t, updatedPipelineRun, corev1.ConditionFalse, v1.PipelineRunReasonCouldntGetTask.String())
 }
 
 // TestReconcileWithTaskResolver checks that a PipelineRun with a populated Resolver
@@ -8204,6 +8197,23 @@ spec:
     name: mytask
     kind: Task
 `),
+		mustParseTaskRunWithObjectMeta(t,
+			taskRunObjectMeta("pr-matrix-using-platforms", "foo",
+				"pr", "p", "matrix-using-platforms", false),
+			`
+spec:
+  params:
+  - name: browser
+    value: chrome
+  - name: platform
+    value: linux
+  - name: version
+    value: v0.33.0
+  serviceAccountName: test-sa
+  taskRef:
+    name: mytask
+    kind: Task
+ `),
 	}
 	cms := []*corev1.ConfigMap{withEnabledAlphaAPIFields(newFeatureFlagsConfigMap())}
 	cms = append(cms, withMaxMatrixCombinationsCount(newDefaultsConfigMap(), 10))
@@ -8241,6 +8251,19 @@ spec:
       params:
         - name: version
           value: v0.33.0
+    - name: matrix-using-platforms
+      taskRef:
+        name: mytask
+      matrix:
+        params:
+          - name: platform
+            value:
+              - linux
+      params:
+        - name: browser
+          value: chrome
+        - name: version
+          value: v0.33.0
 `, "p-dag")),
 		expectedPipelineRun: parse.MustParseV1PipelineRun(t, `
 metadata:
@@ -8276,11 +8299,25 @@ status:
       params:
         - name: version
           value: v0.33.0
+    - name: matrix-using-platforms
+      taskRef:
+        name: mytask
+        kind: Task
+      matrix:
+        params:
+          - name: platform
+            value:
+              - linux
+      params:
+        - name: browser
+          value: chrome
+        - name: version
+          value: v0.33.0
   conditions:
   - type: Succeeded
     status: "Unknown"
     reason: "Running"
-    message: "Tasks Completed: 0 (Failed: 0, Cancelled 0), Incomplete: 1, Skipped: 0"
+    message: "Tasks Completed: 0 (Failed: 0, Cancelled 0), Incomplete: 2, Skipped: 0"
   childReferences:
   - apiVersion: tekton.dev/v1
     kind: TaskRun
@@ -8318,17 +8355,10 @@ status:
     kind: TaskRun
     name: pr-platforms-and-browsers-8
     pipelineTaskName: platforms-and-browsers
-  provenance:
-    featureFlags:
-      RunningInEnvWithInjectedSidecars: true
-      EnableTektonOCIBundles: true
-      EnableAPIFields: "alpha"
-      AwaitSidecarReadiness: true
-      VerificationNoMatchPolicy: "ignore"
-      EnableProvenanceInStatus: true
-      ResultExtractionMethod: "termination-message"
-      MaxResultSize: 4096
-      Coschedule: "workspaces"
+  - apiVersion: tekton.dev/v1
+    kind: TaskRun
+    name: pr-matrix-using-platforms
+    pipelineTaskName: matrix-using-platforms
 `),
 	}, {
 		name:     "p-finally",
@@ -8484,18 +8514,6 @@ status:
     kind: TaskRun
     name: pr-platforms-and-browsers-8
     pipelineTaskName: platforms-and-browsers
-  provenance:
-    featureFlags:
-      RunningInEnvWithInjectedSidecars: true
-      EnableTektonOCIBundles: true
-      EnableAPIFields: "alpha"
-      AwaitSidecarReadiness: true
-      VerificationNoMatchPolicy: "ignore"
-      EnableProvenanceInStatus: true
-      ResultExtractionMethod: "termination-message"
-      MaxResultSize: 4096
-      Coschedule: "workspaces"
-
 `),
 	}}
 	for _, tt := range tests {
@@ -8548,7 +8566,8 @@ spec:
 			if err != nil {
 				t.Fatalf("Got an error getting reconciled run out of fake client: %s", err)
 			}
-			if d := cmp.Diff(tt.expectedPipelineRun, pipelineRun, ignoreResourceVersion, ignoreTypeMeta, ignoreLastTransitionTime, ignoreStartTime, ignoreFinallyStartTime, cmpopts.EquateEmpty()); d != "" {
+			if d := cmp.Diff(tt.expectedPipelineRun, pipelineRun, ignoreResourceVersion, ignoreTypeMeta, ignoreLastTransitionTime,
+				ignoreStartTime, ignoreFinallyStartTime, ignoreProvenance, cmpopts.EquateEmpty()); d != "" {
 				t.Errorf("expected PipelineRun was not created. Diff %s", diff.PrintWantGot(d))
 			}
 		})
@@ -8695,17 +8714,6 @@ status:
     kind: TaskRun
     name: pr-platforms-and-browsers-8
     pipelineTaskName: platforms-and-browsers
-  provenance:
-    featureFlags:
-      RunningInEnvWithInjectedSidecars: true
-      EnableTektonOCIBundles: true
-      EnableAPIFields: "alpha"
-      AwaitSidecarReadiness: true
-      VerificationNoMatchPolicy: "ignore"
-      EnableProvenanceInStatus: true
-      ResultExtractionMethod: "termination-message"
-      MaxResultSize: 4096
-      Coschedule: "workspaces"
 `),
 	}}
 	for _, tt := range tests {
@@ -8810,7 +8818,8 @@ labels:
 				}
 			}
 
-			if d := cmp.Diff(tt.expectedPipelineRun, pipelineRun, ignoreResourceVersion, ignoreTypeMeta, ignoreLastTransitionTime, ignoreStartTime, ignoreFinallyStartTime, cmpopts.EquateEmpty()); d != "" {
+			if d := cmp.Diff(tt.expectedPipelineRun, pipelineRun, ignoreResourceVersion, ignoreTypeMeta, ignoreLastTransitionTime,
+				ignoreStartTime, ignoreFinallyStartTime, ignoreProvenance, cmpopts.EquateEmpty()); d != "" {
 				t.Errorf("found PipelineRun does not match expected PipelineRun. Diff %s", diff.PrintWantGot(d))
 			}
 		})
@@ -9106,17 +9115,6 @@ status:
     kind: TaskRun
     name: pr-matrix-include-6
     pipelineTaskName: matrix-include
-  provenance:
-    featureFlags:
-      RunningInEnvWithInjectedSidecars: true
-      EnableTektonOCIBundles: true
-      EnableAPIFields: "alpha"
-      AwaitSidecarReadiness: true
-      VerificationNoMatchPolicy: "ignore"
-      EnableProvenanceInStatus: true
-      ResultExtractionMethod: "termination-message"
-      MaxResultSize: 4096
-      Coschedule: "workspaces"
 `),
 	}, {
 		name:     "p-finally",
@@ -9310,17 +9308,6 @@ status:
     kind: TaskRun
     name: pr-matrix-include-6
     pipelineTaskName: matrix-include
-  provenance:
-    featureFlags:
-      RunningInEnvWithInjectedSidecars: true
-      EnableTektonOCIBundles: true
-      EnableAPIFields: "alpha"
-      AwaitSidecarReadiness: true
-      VerificationNoMatchPolicy: "ignore"
-      EnableProvenanceInStatus: true
-      ResultExtractionMethod: "termination-message"
-      MaxResultSize: 4096
-      Coschedule: "workspaces"
 `),
 	}}
 	for _, tt := range tests {
@@ -9374,7 +9361,8 @@ spec:
 				t.Fatalf("Got an error getting reconciled run out of fake client: %s", err)
 			}
 
-			if d := cmp.Diff(tt.expectedPipelineRun, pipelineRun, ignoreResourceVersion, ignoreTypeMeta, ignoreLastTransitionTime, ignoreStartTime, ignoreFinallyStartTime, cmpopts.EquateEmpty()); d != "" {
+			if d := cmp.Diff(tt.expectedPipelineRun, pipelineRun, ignoreResourceVersion, ignoreTypeMeta, ignoreLastTransitionTime,
+				ignoreStartTime, ignoreFinallyStartTime, ignoreProvenance, cmpopts.EquateEmpty()); d != "" {
 				t.Errorf("expected PipelineRun was not created. Diff %s", diff.PrintWantGot(d))
 			}
 		})
@@ -9545,17 +9533,6 @@ status:
     kind: TaskRun
     name: pr-matrix-include-2
     pipelineTaskName: matrix-include
-  provenance:
-    featureFlags:
-      RunningInEnvWithInjectedSidecars: true
-      EnableTektonOCIBundles: true
-      EnableAPIFields: "alpha"
-      AwaitSidecarReadiness: true
-      VerificationNoMatchPolicy: "ignore"
-      EnableProvenanceInStatus: true
-      ResultExtractionMethod: "termination-message"
-      MaxResultSize: 4096
-      Coschedule: "workspaces"
 `),
 	},
 	}
@@ -9610,7 +9587,8 @@ spec:
 				t.Fatalf("Got an error getting reconciled run out of fake client: %s", err)
 			}
 
-			if d := cmp.Diff(tt.expectedPipelineRun, pipelineRun, ignoreResourceVersion, ignoreTypeMeta, ignoreLastTransitionTime, ignoreStartTime, ignoreFinallyStartTime, cmpopts.EquateEmpty()); d != "" {
+			if d := cmp.Diff(tt.expectedPipelineRun, pipelineRun, ignoreResourceVersion, ignoreTypeMeta, ignoreLastTransitionTime,
+				ignoreStartTime, ignoreFinallyStartTime, ignoreProvenance, cmpopts.EquateEmpty()); d != "" {
 				t.Errorf("expected PipelineRun was not created. Diff %s", diff.PrintWantGot(d))
 			}
 		})
@@ -9988,17 +9966,6 @@ status:
     kind: TaskRun
     name: pr-platforms-and-browsers-8
     pipelineTaskName: platforms-and-browsers
-  provenance:
-    featureFlags:
-      RunningInEnvWithInjectedSidecars: true
-      EnableTektonOCIBundles: true
-      EnableAPIFields: "alpha"
-      AwaitSidecarReadiness: true
-      VerificationNoMatchPolicy: "ignore"
-      EnableProvenanceInStatus: true
-      ResultExtractionMethod: "termination-message"
-      MaxResultSize: 4096
-      Coschedule: "workspaces"
 `),
 	}, {
 		name:     "p-finally",
@@ -10165,17 +10132,6 @@ status:
     kind: TaskRun
     name: pr-platforms-and-browsers-8
     pipelineTaskName: platforms-and-browsers
-  provenance:
-    featureFlags:
-      RunningInEnvWithInjectedSidecars: true
-      EnableTektonOCIBundles: true
-      EnableAPIFields: "alpha"
-      AwaitSidecarReadiness: true
-      VerificationNoMatchPolicy: "ignore"
-      EnableProvenanceInStatus: true
-      ResultExtractionMethod: "termination-message"
-      MaxResultSize: 4096
-      Coschedule: "workspaces"
 `),
 	}}
 	for _, tt := range tests {
@@ -10229,7 +10185,8 @@ spec:
 				t.Fatalf("Got an error getting reconciled run out of fake client: %s", err)
 			}
 
-			if d := cmp.Diff(tt.expectedPipelineRun, pipelineRun, ignoreResourceVersion, ignoreTypeMeta, ignoreLastTransitionTime, ignoreStartTime, ignoreFinallyStartTime, cmpopts.EquateEmpty()); d != "" {
+			if d := cmp.Diff(tt.expectedPipelineRun, pipelineRun, ignoreResourceVersion, ignoreTypeMeta, ignoreLastTransitionTime,
+				ignoreStartTime, ignoreFinallyStartTime, ignoreProvenance, cmpopts.EquateEmpty()); d != "" {
 				t.Errorf("expected PipelineRun was not created. Diff %s", diff.PrintWantGot(d))
 			}
 		})
@@ -10390,17 +10347,6 @@ status:
     kind: TaskRun
     name: pr-echo-platforms
     pipelineTaskName: echo-platforms
-  provenance:
-    featureFlags:
-      RunningInEnvWithInjectedSidecars: true
-      EnableTektonOCIBundles: true
-      EnableAPIFields: "alpha"
-      AwaitSidecarReadiness: true
-      VerificationNoMatchPolicy: "ignore"
-      EnableProvenanceInStatus: true
-      ResultExtractionMethod: "termination-message"
-      MaxResultSize: 4096
-      Coschedule: "workspaces"
 `),
 	}, {
 		name:  "indexing results in matrix.params",
@@ -10554,17 +10500,6 @@ status:
     kind: TaskRun
     name: pr-echo-platforms-2
     pipelineTaskName: echo-platforms
-  provenance:
-    featureFlags:
-      RunningInEnvWithInjectedSidecars: true
-      EnableTektonOCIBundles: true
-      EnableAPIFields: "alpha"
-      AwaitSidecarReadiness: true
-      VerificationNoMatchPolicy: "ignore"
-      EnableProvenanceInStatus: true
-      ResultExtractionMethod: "termination-message"
-      MaxResultSize: 4096
-      Coschedule: "workspaces"
 `),
 	}, {
 		name:  "whole array result replacements in matrix.params",
@@ -10749,7 +10684,8 @@ spec:
 				}
 			}
 
-			if d := cmp.Diff(tt.expectedPipelineRun, pipelineRun, ignoreResourceVersion, ignoreTypeMeta, ignoreLastTransitionTime, ignoreStartTime, ignoreFinallyStartTime, ignoreProvenance, cmpopts.EquateEmpty()); d != "" {
+			if d := cmp.Diff(tt.expectedPipelineRun, pipelineRun, ignoreResourceVersion, ignoreTypeMeta, ignoreLastTransitionTime,
+				ignoreStartTime, ignoreFinallyStartTime, ignoreProvenance, cmpopts.EquateEmpty()); d != "" {
 				t.Errorf("expected PipelineRun was not created. Diff %s", diff.PrintWantGot(d))
 			}
 		})
@@ -10938,17 +10874,6 @@ status:
     kind: CustomRun
     name:  pr-pt-matrix-custom-task-2
     pipelineTaskName: pt-matrix-custom-task
-  provenance:
-    featureFlags:
-      RunningInEnvWithInjectedSidecars: true
-      EnableTektonOCIBundles: true
-      EnableAPIFields: "alpha"
-      AwaitSidecarReadiness: true
-      VerificationNoMatchPolicy: "ignore"
-      EnableProvenanceInStatus: true
-      ResultExtractionMethod: "termination-message"
-      MaxResultSize: 4096
-      Coschedule: "workspaces"
 `),
 	}}
 	for _, tt := range tests {
@@ -10988,12 +10913,13 @@ spec:
 
 			for i := range customRuns.Items {
 				expectedCustomRun := expectedCustomRuns[i]
-				if d := cmp.Diff(expectedCustomRun, &customRuns.Items[i], ignoreResourceVersion, ignoreTypeMeta, cmpopts.EquateEmpty()); d != "" {
+				if d := cmp.Diff(expectedCustomRun, &customRuns.Items[i], ignoreResourceVersion, ignoreTypeMeta, ignoreProvenance, cmpopts.EquateEmpty()); d != "" {
 					t.Errorf("expected to see CustomRun %v created. Diff %s", expectedCustomRun.Name, diff.PrintWantGot(d))
 				}
 			}
 
-			if d := cmp.Diff(tt.expectedPipelineRun, pipelineRun, ignoreResourceVersion, ignoreTypeMeta, ignoreLastTransitionTime, ignoreStartTime, ignoreFinallyStartTime, cmpopts.EquateEmpty()); d != "" {
+			if d := cmp.Diff(tt.expectedPipelineRun, pipelineRun, ignoreResourceVersion, ignoreTypeMeta, ignoreLastTransitionTime,
+				ignoreStartTime, ignoreFinallyStartTime, ignoreProvenance, cmpopts.EquateEmpty()); d != "" {
 				t.Errorf("expected PipelineRun was not created. Diff %s", diff.PrintWantGot(d))
 			}
 		})
@@ -11163,17 +11089,6 @@ status:
     kind: TaskRun
     name: pr-platforms-and-browsers-1
     pipelineTaskName: platforms-and-browsers
-  provenance:
-    featureFlags:
-      RunningInEnvWithInjectedSidecars: true
-      EnableTektonOCIBundles: true
-      EnableAPIFields: "alpha"
-      AwaitSidecarReadiness: true
-      VerificationNoMatchPolicy: "ignore"
-      EnableProvenanceInStatus: true
-      ResultExtractionMethod: "termination-message"
-      MaxResultSize: 4096
-      Coschedule: "workspaces"
 `),
 		expectedTaskRuns: []*v1.TaskRun{
 			mustParseTaskRunWithObjectMeta(t,
@@ -11360,17 +11275,6 @@ status:
     kind: TaskRun
     name: pr-platforms-and-browsers-1
     pipelineTaskName: platforms-and-browsers
-  provenance:
-    featureFlags:
-      RunningInEnvWithInjectedSidecars: true
-      EnableTektonOCIBundles: true
-      EnableAPIFields: "alpha"
-      AwaitSidecarReadiness: true
-      VerificationNoMatchPolicy: "ignore"
-      EnableProvenanceInStatus: true
-      ResultExtractionMethod: "termination-message"
-      MaxResultSize: 4096
-      Coschedule: "workspaces"
 `),
 		expectedTaskRuns: []*v1.TaskRun{
 			mustParseTaskRunWithObjectMeta(t,
@@ -11460,7 +11364,8 @@ status:
 				t.Fatalf("Got an error getting reconciled run out of fake client: %s", err)
 			}
 
-			if d := cmp.Diff(tt.expectedPipelineRun, pipelineRun, ignoreResourceVersion, ignoreTypeMeta, ignoreLastTransitionTime, ignoreStartTime, cmpopts.SortSlices(lessChildReferences), cmpopts.EquateEmpty()); d != "" {
+			if d := cmp.Diff(tt.expectedPipelineRun, pipelineRun, ignoreResourceVersion, ignoreTypeMeta, ignoreLastTransitionTime,
+				ignoreStartTime, ignoreProvenance, cmpopts.SortSlices(lessChildReferences), cmpopts.EquateEmpty()); d != "" {
 				t.Errorf("expected PipelineRun was not created. Diff %s", diff.PrintWantGot(d))
 			}
 		})
@@ -11775,17 +11680,6 @@ status:
     kind: CustomRun
     name: pr-platforms-and-browsers-8
     pipelineTaskName: platforms-and-browsers
-  provenance:
-    featureFlags:
-      RunningInEnvWithInjectedSidecars: true
-      EnableTektonOCIBundles: true
-      EnableAPIFields: "alpha"
-      AwaitSidecarReadiness: true
-      VerificationNoMatchPolicy: "ignore"
-      EnableProvenanceInStatus: true
-      ResultExtractionMethod: "termination-message"
-      MaxResultSize: 4096
-      Coschedule: "workspaces"
 `),
 	}, {
 		name:     "p-finally",
@@ -11942,17 +11836,6 @@ status:
     kind: CustomRun
     name: pr-platforms-and-browsers-8
     pipelineTaskName: platforms-and-browsers
-  provenance:
-    featureFlags:
-      RunningInEnvWithInjectedSidecars: true
-      EnableTektonOCIBundles: true
-      EnableAPIFields: "alpha"
-      AwaitSidecarReadiness: true
-      VerificationNoMatchPolicy: "ignore"
-      EnableProvenanceInStatus: true
-      ResultExtractionMethod: "termination-message"
-      MaxResultSize: 4096
-      Coschedule: "workspaces"
 `),
 	}}
 	for _, tt := range tests {
@@ -12006,7 +11889,8 @@ spec:
 				t.Fatalf("Got an error getting reconciled run out of fake client: %s", err)
 			}
 
-			if d := cmp.Diff(tt.expectedPipelineRun, pipelineRun, ignoreResourceVersion, ignoreTypeMeta, ignoreLastTransitionTime, ignoreStartTime, ignoreFinallyStartTime, cmpopts.EquateEmpty()); d != "" {
+			if d := cmp.Diff(tt.expectedPipelineRun, pipelineRun, ignoreResourceVersion, ignoreTypeMeta, ignoreLastTransitionTime,
+				ignoreStartTime, ignoreFinallyStartTime, ignoreProvenance, cmpopts.EquateEmpty()); d != "" {
 				t.Errorf("expected PipelineRun was not created. Diff %s", diff.PrintWantGot(d))
 			}
 		})
@@ -12133,6 +12017,325 @@ spec:
 			taskRuns := getTaskRunsForPipelineTask(prt.TestAssets.Ctx, t, clients, pr.Namespace, pr.Name, "echo-platforms")
 			// Validate no TaskRuns were created
 			validateTaskRunsCount(t, taskRuns, 0)
+		})
+	}
+}
+
+func TestReconciler_PipelineTaskMatrix_OnError(t *testing.T) {
+	names.TestingSeed()
+
+	task := parse.MustParseV1Task(t, `
+metadata:
+  name: mytask
+  namespace: foo
+spec:
+  params:
+    - name: param-1
+  steps:
+    - name: echo
+      onError: continue
+      image: alpine
+      script: exit 1
+`)
+
+	expectedTaskRuns := []*v1.TaskRun{
+		mustParseTaskRunWithObjectMeta(t,
+			taskRunObjectMeta("pr-matrix-with-onerror-0", "foo",
+				"pr", "p", "matrix-with-onerror", false),
+			`
+spec:
+  params:
+  - name: param-1
+    value: "0"
+  serviceAccountName: test-sa
+  taskRef:
+    name: mytask
+    kind: Task
+`),
+		mustParseTaskRunWithObjectMeta(t,
+			taskRunObjectMeta("pr-matrix-with-onerror-1", "foo",
+				"pr", "p", "matrix-with-onerror", false),
+			`
+spec:
+  params:
+  - name: param-1
+    value: "1"
+  serviceAccountName: test-sa
+  taskRef:
+    name: mytask
+    kind: Task
+`),
+		mustParseTaskRunWithObjectMeta(t,
+			taskRunObjectMeta("pr-matrix-with-onerror-2", "foo",
+				"pr", "p", "matrix-with-onerror", false),
+			`
+spec:
+  params:
+  - name: param-1
+    value: "2"
+  serviceAccountName: test-sa
+  taskRef:
+    name: mytask
+    kind: Task
+`),
+		mustParseTaskRunWithObjectMeta(t,
+			taskRunObjectMeta("pr-matrix-with-onerror-3", "foo",
+				"pr", "p", "matrix-with-onerror", false),
+			`
+spec:
+  params:
+  - name: param-1
+    value: "3"
+  serviceAccountName: test-sa
+  taskRef:
+    name: mytask
+    kind: Task
+`),
+	}
+	cms := []*corev1.ConfigMap{withEnabledAlphaAPIFields(newFeatureFlagsConfigMap())}
+	cms = append(cms, withMaxMatrixCombinationsCount(newDefaultsConfigMap(), 10))
+
+	tests := []struct {
+		name                string
+		memberOf            string
+		p                   *v1.Pipeline
+		tr                  *v1.TaskRun
+		expectedPipelineRun *v1.PipelineRun
+	}{{
+		name:     "p-dag",
+		memberOf: "tasks",
+		p: parse.MustParseV1Pipeline(t, fmt.Sprintf(`
+metadata:
+  name: %s
+  namespace: foo
+spec:
+  tasks:
+    - name: matrix-with-onerror
+      taskRef:
+        name: mytask
+      matrix:
+        params:
+          - name: param-1
+            value:
+              - "0"
+              - "1"
+              - "2"
+              - "3"
+`, "p-dag")),
+		expectedPipelineRun: parse.MustParseV1PipelineRun(t, `
+metadata:
+  name: pr
+  namespace: foo
+  annotations: {}
+  labels:
+    tekton.dev/pipeline: p-dag
+spec:
+  taskRunTemplate:
+    serviceAccountName: test-sa
+  pipelineRef:
+    name: p-dag
+status:
+  pipelineSpec:
+    tasks:
+    - name: matrix-with-onerror
+      taskRef:
+        name: mytask
+        kind: Task
+      matrix:
+        params:
+          - name: param-1
+            value:
+              - "0"
+              - "1"
+              - "2"
+              - "3"
+  conditions:
+  - type: Succeeded
+    status: "Unknown"
+    reason: "Running"
+    message: "Tasks Completed: 0 (Failed: 0, Cancelled 0), Incomplete: 1, Skipped: 0"
+  childReferences:
+  - apiVersion: tekton.dev/v1
+    kind: TaskRun
+    name: pr-matrix-with-onerror-0
+    pipelineTaskName: matrix-with-onerror
+  - apiVersion: tekton.dev/v1
+    kind: TaskRun
+    name: pr-matrix-with-onerror-1
+    pipelineTaskName: matrix-with-onerror
+  - apiVersion: tekton.dev/v1
+    kind: TaskRun
+    name: pr-matrix-with-onerror-2
+    pipelineTaskName: matrix-with-onerror
+  - apiVersion: tekton.dev/v1
+    kind: TaskRun
+    name: pr-matrix-with-onerror-3
+    pipelineTaskName: matrix-with-onerror
+`),
+	}, {
+		name:     "p-finally",
+		memberOf: "finally",
+		p: parse.MustParseV1Pipeline(t, fmt.Sprintf(`
+metadata:
+  name: %s
+  namespace: foo
+spec:
+  tasks:
+    - name: unmatrixed-pt
+      params:
+        - name: param-1
+          value: "100"
+      taskRef:
+        name: mytask
+  finally:
+    - name: matrix-with-onerror
+      taskRef:
+        name: mytask
+      matrix:
+        params:
+          - name: param-1
+            value:
+              - "0"
+              - "1"
+              - "2"
+              - "3"
+`, "p-finally")),
+		tr: mustParseTaskRunWithObjectMeta(t,
+			taskRunObjectMeta("pr-unmatrixed-pt", "foo",
+				"pr", "p-finally", "unmatrixed-pt", false),
+			`
+spec:
+  params:
+  - name: param-1
+    value: "100"
+  serviceAccountName: test-sa
+  taskRef:
+    name: mytask
+    kind: Task
+status:
+ conditions:
+  - type: Succeeded
+    status: "True"
+    reason: Succeeded
+    message: All Tasks have completed executing
+`),
+		expectedPipelineRun: parse.MustParseV1PipelineRun(t, `
+metadata:
+  name: pr
+  namespace: foo
+  annotations: {}
+  labels:
+    tekton.dev/pipeline: p-finally
+spec:
+  taskRunTemplate:
+    serviceAccountName: test-sa
+  pipelineRef:
+    name: p-finally
+status:
+  pipelineSpec:
+    tasks:
+    - name: unmatrixed-pt
+      params:
+        - name: param-1
+          value: "100"
+      taskRef:
+        name: mytask
+        kind: Task
+    finally:
+    - name: matrix-with-onerror
+      taskRef:
+        name: mytask
+        kind: Task
+      matrix:
+        params:
+          - name: param-1
+            value:
+              - "0"
+              - "1"
+              - "2"
+              - "3"
+  conditions:
+  - type: Succeeded
+    status: "Unknown"
+    reason: "Running"
+    message: "Tasks Completed: 1 (Failed: 0, Cancelled 0), Incomplete: 1, Skipped: 0"
+  childReferences:
+  - apiVersion: tekton.dev/v1
+    kind: TaskRun
+    name: pr-unmatrixed-pt
+    pipelineTaskName: unmatrixed-pt
+  - apiVersion: tekton.dev/v1
+    kind: TaskRun
+    name: pr-matrix-with-onerror-0
+    pipelineTaskName: matrix-with-onerror
+  - apiVersion: tekton.dev/v1
+    kind: TaskRun
+    name: pr-matrix-with-onerror-1
+    pipelineTaskName: matrix-with-onerror
+  - apiVersion: tekton.dev/v1
+    kind: TaskRun
+    name: pr-matrix-with-onerror-2
+    pipelineTaskName: matrix-with-onerror
+  - apiVersion: tekton.dev/v1
+    kind: TaskRun
+    name: pr-matrix-with-onerror-3
+    pipelineTaskName: matrix-with-onerror
+`),
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pr := parse.MustParseV1PipelineRun(t, fmt.Sprintf(`
+metadata:
+  name: pr
+  namespace: foo
+spec:
+  taskRunTemplate:
+    serviceAccountName: test-sa
+  pipelineRef:
+    name: %s
+`, tt.name))
+			d := test.Data{
+				PipelineRuns: []*v1.PipelineRun{pr},
+				Pipelines:    []*v1.Pipeline{tt.p},
+				Tasks:        []*v1.Task{task},
+				ConfigMaps:   cms,
+			}
+			if tt.tr != nil {
+				d.TaskRuns = []*v1.TaskRun{tt.tr}
+			}
+			prt := newPipelineRunTest(t, d)
+			defer prt.Cancel()
+
+			_, clients := prt.reconcileRun("foo", "pr", []string{}, false)
+			taskRuns, err := clients.Pipeline.TektonV1().TaskRuns("foo").List(prt.TestAssets.Ctx, metav1.ListOptions{
+				LabelSelector: fmt.Sprintf("tekton.dev/pipelineRun=pr,tekton.dev/pipeline=%s,tekton.dev/pipelineTask=matrix-with-onerror", tt.name),
+				Limit:         1,
+			})
+			if err != nil {
+				t.Fatalf("Failure to list TaskRun's %s", err)
+			}
+
+			if len(taskRuns.Items) != 4 {
+				t.Fatalf("Expected 4 TaskRuns got %d", len(taskRuns.Items))
+			}
+
+			for i := range taskRuns.Items {
+				expectedTaskRun := expectedTaskRuns[i]
+				expectedTaskRun.Labels["tekton.dev/pipeline"] = tt.name
+				expectedTaskRun.Labels["tekton.dev/memberOf"] = tt.memberOf
+				if d := cmp.Diff(expectedTaskRun, &taskRuns.Items[i], ignoreResourceVersion, ignoreTypeMeta); d != "" {
+					t.Errorf("expected to see TaskRun %v created. Diff %s", expectedTaskRuns[i].Name, diff.PrintWantGot(d))
+				}
+			}
+
+			pipelineRun, err := clients.Pipeline.TektonV1().PipelineRuns("foo").Get(prt.TestAssets.Ctx, "pr", metav1.GetOptions{})
+			if err != nil {
+				t.Fatalf("Got an error getting reconciled run out of fake client: %s", err)
+			}
+			if d := cmp.Diff(tt.expectedPipelineRun, pipelineRun, ignoreResourceVersion, ignoreTypeMeta, ignoreLastTransitionTime,
+				ignoreStartTime, ignoreFinallyStartTime, ignoreProvenance, cmpopts.EquateEmpty()); d != "" {
+				t.Errorf("expected PipelineRun was not created. Diff %s", diff.PrintWantGot(d))
+			}
 		})
 	}
 }
@@ -12419,7 +12622,6 @@ func TestReconcile_FilterLabels(t *testing.T) {
   namespace: foo
   annotations:
     chains.tekton.dev/signed: "true"
-    results.tekton.dev/foo: "bar"
     tekton.dev/foo: "bar"
     foo: bar
 spec:
@@ -12852,7 +13054,7 @@ spec:
 			defer prt.Cancel()
 
 			reconciledRun, _ := prt.reconcileRun("foo", "test-pipelinerun", []string{}, true)
-			checkPipelineRunConditionStatusAndReason(t, reconciledRun, corev1.ConditionFalse, ReasonResourceVerificationFailed)
+			checkPipelineRunConditionStatusAndReason(t, reconciledRun, corev1.ConditionFalse, v1.PipelineRunReasonResourceVerificationFailed.String())
 			gotVerificationCondition := reconciledRun.Status.GetCondition(trustedresources.ConditionTrustedResourcesVerified)
 			if gotVerificationCondition == nil || gotVerificationCondition.Status != corev1.ConditionFalse {
 				t.Errorf("Expected to have false condition, but had %v", gotVerificationCondition)
@@ -13187,7 +13389,7 @@ spec:
 			defer prt.Cancel()
 
 			reconciledRun, _ := prt.reconcileRun("foo", "test-pipelinerun", []string{}, true)
-			checkPipelineRunConditionStatusAndReason(t, reconciledRun, corev1.ConditionFalse, ReasonResourceVerificationFailed)
+			checkPipelineRunConditionStatusAndReason(t, reconciledRun, corev1.ConditionFalse, v1.PipelineRunReasonResourceVerificationFailed.String())
 			gotVerificationCondition := reconciledRun.Status.GetCondition(trustedresources.ConditionTrustedResourcesVerified)
 			if gotVerificationCondition == nil || gotVerificationCondition.Status != corev1.ConditionFalse {
 				t.Errorf("Expected to have false condition, but had %v", gotVerificationCondition)

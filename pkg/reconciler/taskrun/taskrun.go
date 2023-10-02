@@ -39,6 +39,7 @@ import (
 	resolutionutil "github.com/tektoncd/pipeline/pkg/internal/resolution"
 	podconvert "github.com/tektoncd/pipeline/pkg/pod"
 	tknreconciler "github.com/tektoncd/pipeline/pkg/reconciler"
+	"github.com/tektoncd/pipeline/pkg/reconciler/apiserver"
 	"github.com/tektoncd/pipeline/pkg/reconciler/events"
 	"github.com/tektoncd/pipeline/pkg/reconciler/events/cloudevent"
 	"github.com/tektoncd/pipeline/pkg/reconciler/taskrun/resources"
@@ -92,9 +93,15 @@ type Reconciler struct {
 	tracerProvider           trace.TracerProvider
 }
 
-// Check that our Reconciler implements taskrunreconciler.Interface
 var (
+	// Check that our Reconciler implements taskrunreconciler.Interface
 	_ taskrunreconciler.Interface = (*Reconciler)(nil)
+
+	// Pod failure reasons that trigger failure of the TaskRun
+	podFailureReasons = map[string]struct{}{
+		"ImagePullBackOff": {},
+		"InvalidImageName": {},
+	}
 )
 
 // ReconcileKind compares the actual state with the desired, and attempts to
@@ -189,7 +196,7 @@ func (c *Reconciler) ReconcileKind(ctx context.Context, tr *v1.TaskRun) pkgrecon
 		logger.Errorf("Reconcile: %v", err.Error())
 		if errors.Is(err, sidecarlogresults.ErrSizeExceeded) {
 			cfg := config.FromContextOrDefaults(ctx)
-			message := fmt.Sprintf("TaskRun %q failed: results exceeded size limit %d bytes", tr.Name, cfg.FeatureFlags.MaxResultSize)
+			message := fmt.Sprintf("TaskRun \"%q\" failed: results exceeded size limit %d bytes", tr.Name, cfg.FeatureFlags.MaxResultSize)
 			err := c.failTaskRun(ctx, tr, v1.TaskRunReasonResultLargerThanAllowedLimit, message)
 			return c.finishReconcileUpdateEmitEvents(ctx, tr, before, err)
 		}
@@ -211,17 +218,21 @@ func (c *Reconciler) ReconcileKind(ctx context.Context, tr *v1.TaskRun) pkgrecon
 
 func (c *Reconciler) checkPodFailed(tr *v1.TaskRun) (bool, v1.TaskRunReason, string) {
 	for _, step := range tr.Status.Steps {
-		if step.Waiting != nil && step.Waiting.Reason == "ImagePullBackOff" {
-			image := step.ImageID
-			message := fmt.Sprintf(`The step %q in TaskRun %q failed to pull the image %q. The pod errored with the message: "%s."`, step.Name, tr.Name, image, step.Waiting.Message)
-			return true, v1.TaskRunReasonImagePullFailed, message
+		if step.Waiting != nil {
+			if _, found := podFailureReasons[step.Waiting.Reason]; found {
+				image := step.ImageID
+				message := fmt.Sprintf(`The step %q in TaskRun %q failed to pull the image %q. The pod errored with the message: "%s."`, step.Name, tr.Name, image, step.Waiting.Message)
+				return true, v1.TaskRunReasonImagePullFailed, message
+			}
 		}
 	}
 	for _, sidecar := range tr.Status.Sidecars {
-		if sidecar.Waiting != nil && sidecar.Waiting.Reason == "ImagePullBackOff" {
-			image := sidecar.ImageID
-			message := fmt.Sprintf(`The sidecar %q in TaskRun %q failed to pull the image %q. The pod errored with the message: "%s."`, sidecar.Name, tr.Name, image, sidecar.Waiting.Message)
-			return true, v1.TaskRunReasonImagePullFailed, message
+		if sidecar.Waiting != nil {
+			if _, found := podFailureReasons[sidecar.Waiting.Reason]; found {
+				image := sidecar.ImageID
+				message := fmt.Sprintf(`The sidecar %q in TaskRun %q failed to pull the image %q. The pod errored with the message: "%s."`, sidecar.Name, tr.Name, image, sidecar.Waiting.Message)
+				return true, v1.TaskRunReasonImagePullFailed, message
+			}
 		}
 	}
 	return false, "", ""
@@ -327,6 +338,11 @@ func (c *Reconciler) prepare(ctx context.Context, tr *v1.TaskRun) (*v1.TaskSpec,
 	case errors.Is(err, remote.ErrRequestInProgress):
 		message := fmt.Sprintf("TaskRun %s/%s awaiting remote resource", tr.Namespace, tr.Name)
 		tr.Status.MarkResourceOngoing(v1.TaskRunReasonResolvingTaskRef, message)
+		return nil, nil, err
+	case errors.Is(err, apiserver.ErrReferencedObjectValidationFailed), errors.Is(err, apiserver.ErrCouldntValidateObjectPermanent):
+		tr.Status.MarkResourceFailed(podconvert.ReasonTaskFailedValidation, err)
+		return nil, nil, controller.NewPermanentError(err)
+	case errors.Is(err, apiserver.ErrCouldntValidateObjectRetryable):
 		return nil, nil, err
 	case err != nil:
 		logger.Errorf("Failed to determine Task spec to use for taskrun %s: %v", tr.Name, err)
@@ -715,6 +731,14 @@ func (c *Reconciler) createPod(ctx context.Context, ts *v1.TaskSpec, tr *v1.Task
 	defer span.End()
 	logger := logging.FromContext(ctx)
 
+	// We don't want to mutate tr.Status.TaskSpec inside
+	// the createPod function. It's possible that pod will
+	// be killed before running and when rescheduling it
+	// will cause bugs. As this function could be called
+	// multiple times, we copy tr.Status.TaskSpec to help
+	// in scheduling Pod.
+	ts = ts.DeepCopy()
+
 	// By this time, params and workspaces should be propagated down so we can
 	// validate that all parameter variables and workspaces used in the TaskSpec are declared by the Task.
 	if validateErr := v1.ValidateUsageOfDeclaredParameters(ctx, ts.Steps, ts.Params); validateErr != nil {
@@ -956,6 +980,7 @@ func retryTaskRun(tr *v1.TaskRun, message string) {
 	tr.Status.StartTime = nil
 	tr.Status.CompletionTime = nil
 	tr.Status.PodName = ""
+	tr.Status.Results = nil
 	taskRunCondSet := apis.NewBatchConditionSet()
 	taskRunCondSet.Manage(&tr.Status).MarkUnknown(apis.ConditionSucceeded, v1.TaskRunReasonToBeRetried.String(), message)
 }

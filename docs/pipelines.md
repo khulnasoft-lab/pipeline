@@ -14,6 +14,7 @@ weight: 203
   - [Specifying `Parameters`](#specifying-parameters)
   - [Adding `Tasks` to the `Pipeline`](#adding-tasks-to-the-pipeline)
     - [Specifying Remote Tasks](#specifying-remote-tasks)
+    - [Specifying `Pipelines` in `PipelineTasks`](#specifying-pipelines-in-pipelinetasks)
     - [Specifying `Parameters` in `PipelineTasks`](#specifying-parameters-in-pipelinetasks)
     - [Specifying `Matrix` in `PipelineTasks`](#specifying-matrix-in-pipelinetasks)
     - [Specifying `Workspaces` in `PipelineTasks`](#specifying-workspaces-in-pipelinetasks)
@@ -182,7 +183,7 @@ spec:
 
 For more information, see:
 - [Using `Workspaces` in `Pipelines`](workspaces.md#using-workspaces-in-pipelines)
-- The [`Workspaces` in a `PipelineRun`](../examples/v1beta1/pipelineruns/workspaces.yaml) code example
+- The [`Workspaces` in a `PipelineRun`](../examples/v1/pipelineruns/workspaces.yaml) code example
 - The [variables available in a `PipelineRun`](variables.md#variables-available-in-a-pipeline), including `workspaces.<name>.bound`.
 - [Mapping `Workspaces`](https://github.com/tektoncd/community/blob/main/teps/0108-mapping-workspaces.md)
 
@@ -317,6 +318,59 @@ tasks:
       value: task/golang-build/0.3/golang-build.yaml
 ```
 
+### Specifying `Pipelines` in `PipelineTasks`
+
+> :seedling: **Specifying `pipelines` in `PipelineTasks` is an [alpha](additional-configs.md#alpha-features) feature.**
+> The `enable-api-fields` feature flag must be set to `"alpha"` to specify `PipelineRef` or `PipelineSpec` in a `PipelineTask`.
+> This feature is in **Preview Only** mode and not yet supported/implemented.
+
+Apart from `taskRef` and `taskSpec`, `pipelineRef` and `pipelineSpec` allows you to specify a `pipeline`  in `pipelineTask`.
+This allows you to generate a child `pipelineRun` which is inherited by the parent `pipelineRun`.
+
+```
+kind: Pipeline
+metadata:
+  name: security-scans
+spec:
+  tasks:
+    - name: scorecards
+      taskSpec:
+        steps:
+          - image: alpine
+            name: step-1
+            script: |
+              echo "Generating scorecard report ..."
+    - name: codeql
+      taskSpec:
+        steps:
+          - image: alpine
+            name: step-1
+            script: |
+              echo "Generating codeql report ..."
+---
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: clone-scan-notify
+spec:
+  tasks:
+    - name: git-clone
+      taskSpec:
+        steps:
+          - image: alpine
+            name: step-1
+            script: |
+              echo "Cloning a repo to run security scans ..."
+    - name: security-scans
+      runAfter:
+        - git-clone
+      pipelineRef:
+        name: security-scans
+---
+```
+For further information read [Pipelines in Pipelines](./pipelines-in-pipelines.md)
+
+
 ### Specifying `Parameters` in `PipelineTasks`
 
 You can also provide [`Parameters`](tasks.md#specifying-parameters):
@@ -336,7 +390,7 @@ spec:
 
 ### Specifying `Matrix` in `PipelineTasks`
 
-> :seedling: **`Matrix` is an [alpha](install.md#alpha-features) feature.**
+> :seedling: **`Matrix` is an [alpha](additional-configs.md#alpha-features) feature.**
 > The `enable-api-fields` feature flag must be set to `"alpha"` to specify `Matrix` in a `PipelineTask`.
 
 You can also provide [`Parameters`](tasks.md#specifying-parameters) through the `matrix` field:
@@ -609,7 +663,7 @@ tasks:
       name: deployment
 ```
 
-For an end-to-end example, see [PipelineRun with `when` expressions](../examples/v1beta1/pipelineruns/pipelinerun-with-when-expressions.yaml).
+For an end-to-end example, see [PipelineRun with `when` expressions](../examples/v1/pipelineruns/pipelinerun-with-when-expressions.yaml).
 
 There are a lot of scenarios where `when` expressions can be really useful. Some of these are:
 - Checking if the name of a git branch matches
@@ -863,7 +917,7 @@ performed by the Tekton Controller when a PipelineRun is executed.
 See the [complete list of variable substitutions for Pipelines](./variables.md#variables-available-in-a-pipeline)
 and the [list of fields that accept substitutions](./variables.md#fields-that-accept-variable-substitutions).
 
-For an end-to-end example, see [using context variables](../examples/v1beta1/pipelineruns/using_context_variables.yaml).
+For an end-to-end example, see [using context variables](../examples/v1/pipelineruns/using_context_variables.yaml).
 
 ### Using the `retries` and `retry-count` variable substitutions
 
@@ -921,8 +975,6 @@ Array and Object result is a beta feature and can be enabled by setting `enable-
 
 **Note:** Whole Array and Object `Results` (using star notation) cannot be referred in `script`.
 
-**Note:** `Matrix` does not support `object` and `array` results.
-
 When one `Task` receives the `Results` of another, there is a dependency created between those
 two `Tasks`. In order for the receiving `Task` to get data from another `Task's` `Result`,
 the `Task` producing the `Result` must run first. Tekton enforces this `Task` ordering
@@ -963,7 +1015,7 @@ when:
     values: ["yes"]
 ```
 
-For an end-to-end example, see [`Task` `Results` in a `PipelineRun`](../examples/v1beta1/pipelineruns/task_results_example.yaml).
+For an end-to-end example, see [`Task` `Results` in a `PipelineRun`](../examples/v1/pipelineruns/task_results_example.yaml).
 
 Note that `when` expressions are whitespace-sensitive.  In particular, when producing results intended for inputs to `when`
 expressions that may include newlines at their close (e.g. `cat`, `jq`), you may wish to truncate them.
@@ -1004,10 +1056,10 @@ results:
     value: $(tasks.calculate-sum.results.outputValue)
 ```
 
-For an end-to-end example, see [`Results` in a `PipelineRun`](../examples/v1beta1/pipelineruns/pipelinerun-results.yaml).
+For an end-to-end example, see [`Results` in a `PipelineRun`](../examples/v1/pipelineruns/pipelinerun-results.yaml).
 
 Object result and array result are beta features,
-see [`Array and Object Results` in a `PipelineRun`](../examples/v1beta1/pipelineruns/beta/pipeline-emitting-results.yaml).
+see [`Array and Object Results` in a `PipelineRun`](../examples/v1/pipelineruns/beta/pipeline-emitting-results.yaml).
 
 ```yaml
     results:
@@ -1197,7 +1249,7 @@ spec:
 
 ### Specifying `matrix` in `finally` tasks
 
-> :seedling: **`Matrix` is an [alpha](install.md#alpha-features) feature.**
+> :seedling: **`Matrix` is an [alpha](additional-configs.md#alpha-features) feature.**
 > The `enable-api-fields` feature flag must be set to `"alpha"` to specify `Matrix` in a `PipelineTask`.
 
 Similar to `tasks`, you can also provide [`Parameters`](tasks.md#specifying-parameters) through `matrix`
@@ -1341,7 +1393,7 @@ This kind of variable can have any one of the values from the following table:
 | `Failed`    | `taskRun` for the `pipelineTask` completed with a failure or cancelled by the user               |
 | `None`      | the `pipelineTask` has been skipped or no execution information available for the `pipelineTask` |
 
-For an end-to-end example, see [`status` in a `PipelineRun`](../examples/v1beta1/pipelineruns/pipelinerun-task-execution-status.yaml).
+For an end-to-end example, see [`status` in a `PipelineRun`](../examples/v1/pipelineruns/pipelinerun-task-execution-status.yaml).
 
 ### Using Aggregate Execution `Status` of All `Tasks`
 
@@ -1375,7 +1427,7 @@ This kind of variable can have any one of the values from the following table:
 | `Completed` | all `tasks` completed successfully including one or more skipped tasks                                                            |
 | `None`      | no aggregate execution status available (i.e. none of the above), one or more `tasks` could be pending/running/cancelled/timedout |
 
-For an end-to-end example, see [`$(tasks.status)` usage in a `Pipeline`](../examples/v1beta1/pipelineruns/pipelinerun-task-execution-status.yaml).
+For an end-to-end example, see [`$(tasks.status)` usage in a `Pipeline`](../examples/v1/pipelineruns/pipelinerun-task-execution-status.yaml).
 
 ### Guard `finally` `Task` execution using `when` expressions
 
@@ -1488,7 +1540,7 @@ spec:
       # […]
 ```
 
-For an end-to-end example, see [PipelineRun with `when` expressions](../examples/v1beta1/pipelineruns/pipelinerun-with-when-expressions.yaml).
+For an end-to-end example, see [PipelineRun with `when` expressions](../examples/v1/pipelineruns/pipelinerun-with-when-expressions.yaml).
 
 #### `when` expressions using `Aggregate Execution Status` of `Tasks` in `finally` `tasks`
 
@@ -1506,7 +1558,7 @@ finally:
       name: notify-failure
 ```
 
-For an end-to-end example, see [PipelineRun with `when` expressions](../examples/v1beta1/pipelineruns/pipelinerun-with-when-expressions.yaml).
+For an end-to-end example, see [PipelineRun with `when` expressions](../examples/v1/pipelineruns/pipelinerun-with-when-expressions.yaml).
 
 ### Known Limitations
 
@@ -1650,7 +1702,7 @@ spec:
 
 ### Specifying matrix
 
-> :seedling: **`Matrix` is an [alpha](install.md#alpha-features) feature.**
+> :seedling: **`Matrix` is an [alpha](additional-configs.md#alpha-features) feature.**
 > The `enable-api-fields` feature flag must be set to `"alpha"` to specify `Matrix` in a `PipelineTask`.
 
 If a custom task supports [`parameters`](tasks.md#specifying-parameters), you can use the
